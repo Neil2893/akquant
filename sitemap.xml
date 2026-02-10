@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    <url>
+        <loc>https://akquant.akfamily.xyz/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/api/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/api/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/api/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/architecture/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/architecture/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/architecture/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/design/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/design/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/design/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/env_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/env_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/env_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/examples/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/examples/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/examples/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/installation/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/installation/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/installation/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/llm_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/llm_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/llm_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/ml_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/ml_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/ml_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/py_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/py_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/py_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/quant_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/quant_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/quant_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/quickstart/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/quickstart/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/quickstart/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/strategy_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/strategy_guide/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/strategy_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/timezone/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/timezone/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/timezone/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/tutorial/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/tutorial/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/tutorial/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/api/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/api/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/api/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/architecture/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/architecture/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/architecture/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/design/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/design/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/design/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/env_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/env_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/env_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/examples/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/examples/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/examples/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/installation/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/installation/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/installation/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/llm_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/llm_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/llm_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/ml_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/ml_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/ml_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/py_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/py_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/py_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/quant_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/quant_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/quant_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/quickstart/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/quickstart/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/quickstart/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/strategy_guide/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/strategy_guide/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/strategy_guide/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/timezone/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/timezone/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/timezone/"/>
+    </url>
+    <url>
+        <loc>https://akquant.akfamily.xyz/en/tutorial/</loc>
+        <lastmod>2026-02-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://akquant.akfamily.xyz/en/tutorial/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://akquant.akfamily.xyz/tutorial/"/>
+    </url>
+</urlset>
