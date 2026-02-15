@@ -67,7 +67,15 @@ impl Processor for ChannelProcessor {
     }
 }
 
-pub struct DataProcessor;
+pub struct DataProcessor {
+    last_timestamp: i64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        Self { last_timestamp: 0 }
+    }
+}
 
 impl Processor for DataProcessor {
     fn process(&mut self, engine: &mut Engine, py: Python<'_>, _strategy: &Bound<'_, PyAny>) -> PyResult<ProcessorResult> {
@@ -96,10 +104,13 @@ impl Processor for DataProcessor {
                     _ => 0,
                 };
 
-                engine.bar_count += 1;
-                if let Some(pb) = &engine.progress_bar {
-                    pb.inc(1);
+                if self.last_timestamp != 0 && timestamp > self.last_timestamp {
+                    engine.bar_count += 1;
+                    if let Some(pb) = &engine.progress_bar {
+                        pb.inc(1);
+                    }
                 }
+                self.last_timestamp = timestamp;
 
                 let local_dt = Engine::local_datetime_from_ns(timestamp, engine.timezone_offset);
 
@@ -174,11 +185,11 @@ pub struct ExecutionProcessor;
 
 impl Processor for ExecutionProcessor {
     fn process(&mut self, engine: &mut Engine, _py: Python<'_>, _strategy: &Bound<'_, PyAny>) -> PyResult<ProcessorResult> {
-        if let Some(event) = &engine.current_event {
+        if let Some(event) = engine.current_event.clone() {
             match event {
                 Event::Bar(_) | Event::Tick(_) => {
                     let reports = engine.execution_model.on_event(
-                        event,
+                        &event,
                         &engine.instruments,
                         &engine.portfolio,
                         &engine.last_prices,

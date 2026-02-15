@@ -416,7 +416,7 @@ impl Engine {
         // Initialize Pipeline
         let mut pipeline = PipelineRunner::new();
         pipeline.add_processor(Box::new(ChannelProcessor));
-        pipeline.add_processor(Box::new(DataProcessor));
+        pipeline.add_processor(Box::new(DataProcessor::new()));
         pipeline.add_processor(Box::new(StrategyProcessor));
         pipeline.add_processor(Box::new(ExecutionProcessor));
         pipeline.add_processor(Box::new(StatisticsProcessor));
