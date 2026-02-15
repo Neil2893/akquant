@@ -109,4 +109,90 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
 print(result)
 print(result.orders_df)
+
+# Verify metrics manually in Python
+equity_curve = result.equity_curve
+if not equity_curve.empty:
+    print("\n--- Manual Verification ---")
+
+    # 1. Total Return
+    initial_equity = result.metrics.initial_market_value
+    final_equity = result.metrics.end_market_value
+    total_return_pct = (final_equity - initial_equity) / initial_equity
+    print(f"Total Return % (Manual): {total_return_pct:.6%}")
+    print(f"Total Return % (Rust):   {result.metrics.total_return_pct / 100:.6%}")
+
+    # 2. Annualized Return
+    # Duration in days
+    # Fix: result.metrics.duration is a datetime.timedelta in Python wrapper
+    # if conversion works, or int (nanoseconds) if raw.
+    # Let's inspect type first.
+    duration_val = result.metrics.duration
+
+    if isinstance(duration_val, int):
+        # Nanoseconds
+        duration_days = duration_val / (1e9 * 3600 * 24)
+    elif hasattr(duration_val, "total_seconds"):
+        # timedelta
+        duration_days = duration_val.total_seconds() / (3600 * 24)
+    else:
+        # Fallback
+        duration_days = 0.0
+
+    if duration_days > 0:
+        annualized_return = (1 + total_return_pct) ** (365 / duration_days) - 1
+        print(f"Annualized Return (Manual): {annualized_return:.6f}")
+        print(f"Annualized Return (Rust):   {result.metrics.annualized_return:.6f}")
+
+    # 3. Volatility
+    # Resample to daily (end of day)
+    daily_equity = equity_curve.resample("D").last().ffill()
+    daily_returns = daily_equity.pct_change().dropna()
+    volatility = daily_returns.std() * (252**0.5)
+    print(f"Volatility (Manual): {volatility:.6f}")
+    print(f"Volatility (Rust):   {result.metrics.volatility:.6f}")
+
+    # 4. Max Drawdown
+    rolling_max = equity_curve.cummax()
+    drawdown = equity_curve - rolling_max
+    max_drawdown = drawdown.min()
+    max_drawdown_pct = (drawdown / rolling_max).min()
+
+    print(f"Max Drawdown (Manual): {max_drawdown:.6f}")
+    print(
+        f"Max Drawdown (Rust):   {-result.metrics.max_drawdown_value:.6f}"
+    )  # Rust stores positive value for DD
+
+    print(f"Max Drawdown % (Manual): {max_drawdown_pct:.6%}")
+    print(
+        f"Max Drawdown % (Rust):   {-result.metrics.max_drawdown_pct / 100:.6%}"
+    )  # Rust stores positive value for DD %
+
+    # 5. Std Error & R2
+    import numpy as np
+
+    y = equity_curve.to_numpy(dtype=float)
+    n = len(y)
+    x = np.arange(n)
+
+    # Linear Regression: y = slope * x + intercept
+    slope, intercept = np.polyfit(x, y, 1)
+    y_pred = slope * x + intercept
+
+    # Residuals
+    residuals = y - y_pred
+    ss_res = np.sum(residuals**2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+
+    r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0.0
+
+    # Standard Error of Estimate
+    # Rust uses divisor (n - 2.0)
+    std_error = np.sqrt(ss_res / (n - 2)) if n > 2 else 0.0
+
+    print(f"R2 (Manual):        {r2:.6f}")
+    print(f"R2 (Rust):          {result.metrics.equity_r2:.6f}")
+    print(f"Std Error (Manual): {std_error:.6f}")
+    print(f"Std Error (Rust):   {result.metrics.std_error:.6f}")
+
 # print(result.equity_curve)

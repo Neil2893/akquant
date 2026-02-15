@@ -253,6 +253,17 @@ impl ExecutionClient for SimulatedExecutionClient {
         }
 
         // Cleanup filled/cancelled/rejected orders from pending list
+        // Note: We need to do this carefully because `reports` contains the updated order state.
+        // We should mark orders as Filled in `self.pending_orders` if they are reported as Filled.
+        for report in &reports {
+            if let Event::ExecutionReport(updated_order, _) = report {
+                if let Some(existing) = self.pending_orders.iter_mut().find(|o| o.id == updated_order.id) {
+                    existing.status = updated_order.status;
+                    existing.filled_quantity = updated_order.filled_quantity;
+                }
+            }
+        }
+
         self.pending_orders.retain(|o| {
             o.status != OrderStatus::Filled
                 && o.status != OrderStatus::Cancelled

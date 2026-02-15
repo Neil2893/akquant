@@ -1,7 +1,7 @@
 use crate::data::FeedAction;
 use crate::engine::Engine;
 use crate::event::Event;
-use crate::model::{OrderStatus, TradingSession};
+use crate::model::{ExecutionMode, OrderStatus, TradingSession};
 use crate::pipeline::processor::{Processor, ProcessorResult};
 use pyo3::prelude::*;
 
@@ -153,6 +153,10 @@ impl Processor for DataProcessor {
                     }
                 }
 
+                if let Event::Bar(ref _b) = event {
+                    // println!("DataProcessor: Bar Symbol={}, TS={}", b.symbol, b.timestamp);
+                }
+
                 engine.current_event = Some(event);
                 Ok(ProcessorResult::Next)
             }
@@ -181,10 +185,39 @@ impl Processor for StrategyProcessor {
     }
 }
 
-pub struct ExecutionProcessor;
+#[derive(Debug)]
+pub enum ExecutionPhase {
+    PreStrategy,
+    PostStrategy,
+}
+
+pub struct ExecutionProcessor {
+    phase: ExecutionPhase,
+}
+
+impl ExecutionProcessor {
+    pub fn new(phase: ExecutionPhase) -> Self {
+        Self { phase }
+    }
+}
 
 impl Processor for ExecutionProcessor {
     fn process(&mut self, engine: &mut Engine, _py: Python<'_>, _strategy: &Bound<'_, PyAny>) -> PyResult<ProcessorResult> {
+        let should_run = match self.phase {
+            ExecutionPhase::PreStrategy => matches!(
+                engine.execution_mode,
+                ExecutionMode::NextOpen | ExecutionMode::NextAverage | ExecutionMode::NextHighLowMid
+            ),
+            ExecutionPhase::PostStrategy => matches!(
+                engine.execution_mode,
+                ExecutionMode::CurrentClose
+            ),
+        };
+
+        if !should_run {
+            return Ok(ProcessorResult::Next);
+        }
+
         if let Some(event) = engine.current_event.clone() {
             match event {
                 Event::Bar(_) | Event::Tick(_) => {
@@ -222,7 +255,7 @@ pub struct StatisticsProcessor;
 
 impl Processor for StatisticsProcessor {
     fn process(&mut self, engine: &mut Engine, _py: Python<'_>, _strategy: &Bound<'_, PyAny>) -> PyResult<ProcessorResult> {
-        if let Some(event) = &engine.current_event {
+        if let Some(event) = engine.current_event.clone() {
             match event {
                  Event::Bar(_) | Event::Tick(_) => {
                     if let Some(timestamp) = engine.clock.timestamp() {

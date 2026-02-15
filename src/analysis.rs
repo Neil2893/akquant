@@ -506,19 +506,37 @@ impl BacktestResult {
 
         let ulcer_index = (sum_sq_drawdown / equity_curve.len() as f64).sqrt();
 
-        // 3. Returns Series for Volatility & Sharpe
+        // 3. Returns Series for Volatility & Sharpe (Resampled to Daily)
+        let mut daily_equity_map: std::collections::BTreeMap<i64, Decimal> = std::collections::BTreeMap::new();
+
+        // Use 24h buckets (86400 * 1e9 ns) to group by day.
+        // Note: This assumes local time is consistent or UTC.
+        // A simple approximation is integer division by 86400_000_000_000 (1 day in ns).
+        // This works for UTC timestamps.
+
+        for (ts, eq) in &equity_curve_decimal {
+            let day_key = ts / 86_400_000_000_000;
+            daily_equity_map.insert(day_key, *eq);
+        }
+
+        let daily_equities: Vec<Decimal> = daily_equity_map.values().cloned().collect();
+
         let mut returns = Vec::new();
         let mut downside_returns = Vec::new();
-        for i in 1..equity_curve.len() {
-            let prev = equity_curve[i - 1].1;
-            let curr = equity_curve[i].1;
-            if prev != 0.0 {
-                let r = (curr - prev) / prev;
-                returns.push(r);
-                if r < 0.0 {
-                    downside_returns.push(r);
-                } else {
-                    downside_returns.push(0.0);
+
+        if daily_equities.len() > 1 {
+            for i in 1..daily_equities.len() {
+                let prev = daily_equities[i - 1];
+                let curr = daily_equities[i];
+                if !prev.is_zero() {
+                    let r_dec = (curr - prev) / prev;
+                    let r = r_dec.to_f64().unwrap_or_default();
+                    returns.push(r);
+                    if r < 0.0 {
+                        downside_returns.push(r);
+                    } else {
+                        downside_returns.push(0.0);
+                    }
                 }
             }
         }

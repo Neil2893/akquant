@@ -21,8 +21,8 @@ use crate::model::{
 };
 use crate::order_manager::OrderManager;
 use crate::pipeline::stages::{
-    ChannelProcessor, CleanupProcessor, DataProcessor, ExecutionProcessor, StatisticsProcessor,
-    StrategyProcessor,
+    ChannelProcessor, CleanupProcessor, DataProcessor, ExecutionPhase, ExecutionProcessor,
+    StatisticsProcessor, StrategyProcessor,
 };
 use crate::pipeline::PipelineRunner;
 use crate::portfolio::Portfolio;
@@ -415,10 +415,33 @@ impl Engine {
 
         // Initialize Pipeline
         let mut pipeline = PipelineRunner::new();
+        // 1. Process events from previous iteration (or init)
         pipeline.add_processor(Box::new(ChannelProcessor));
+
+        // 2. Fetch new Data Event
         pipeline.add_processor(Box::new(DataProcessor::new()));
+
+        // 3. Pre-Strategy Execution (Match Pending Orders)
+        // For NextOpen/NextAverage: Matches orders generated in previous bar against current bar.
+        pipeline.add_processor(Box::new(ExecutionProcessor::new(ExecutionPhase::PreStrategy)));
+
+        // 4. Process Fills from Pre-Execution immediately (Update Portfolio before Strategy)
+        pipeline.add_processor(Box::new(ChannelProcessor));
+
+        // 5. Run Strategy
         pipeline.add_processor(Box::new(StrategyProcessor));
-        pipeline.add_processor(Box::new(ExecutionProcessor));
+
+        // 6. Process Order Requests from Strategy immediately (Validate -> Pending)
+        pipeline.add_processor(Box::new(ChannelProcessor));
+
+        // 7. Post-Strategy Execution
+        // For CurrentClose: Matches orders generated in current bar against current bar.
+        pipeline.add_processor(Box::new(ExecutionProcessor::new(ExecutionPhase::PostStrategy)));
+
+        // 8. Process Fills from Post-Execution
+        pipeline.add_processor(Box::new(ChannelProcessor));
+
+        // 9. Statistics & Cleanup
         pipeline.add_processor(Box::new(StatisticsProcessor));
         pipeline.add_processor(Box::new(CleanupProcessor));
 
@@ -431,6 +454,19 @@ impl Engine {
 
         // Final cleanup
         self.order_manager.cleanup_finished_orders();
+
+        // Record final snapshot if we have data
+        if self.current_date.is_some() {
+            if let Some(timestamp) = self.clock.timestamp() {
+                self.statistics_manager.record_snapshot(
+                    timestamp,
+                    &self.portfolio,
+                    &self.instruments,
+                    &self.last_prices,
+                    &self.order_manager.trade_tracker,
+                );
+            }
+        }
 
         if let Some(pb) = &self.progress_bar {
             pb.finish_with_message("Backtest completed");

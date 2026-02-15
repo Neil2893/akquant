@@ -136,3 +136,5 @@ result = aq.run_backtest(
 pd.set_option("display.max_columns", None)
 print(result)
 print(result.cash_curve)
+print(result.orders_df)
+print(result.trades_df)

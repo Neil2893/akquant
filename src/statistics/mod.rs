@@ -119,7 +119,7 @@ impl StatisticsManager {
         instruments: &HashMap<String, Instrument>,
         last_prices: &HashMap<String, Decimal>,
         order_manager: &crate::order_manager::OrderManager,
-        _initial_capital: Decimal,
+        initial_capital: Decimal,
         now_ns: Option<i64>,
     ) -> BacktestResult {
         // Calculate final PnL
@@ -156,22 +156,16 @@ impl StatisticsManager {
             }
         }
 
-        BacktestResult {
-            equity_curve: equity_curve
-                .into_iter()
-                .map(|(t, v)| (t, v.to_f64().unwrap_or(0.0)))
-                .collect(),
-            cash_curve: cash_curve
-                .into_iter()
-                .map(|(t, v)| (t, v.to_f64().unwrap_or(0.0)))
-                .collect(),
-            metrics: crate::analysis::PerformanceMetrics::default(), // Will be populated in Python
-            trade_metrics: trade_pnl,
-            trades: order_manager.trade_tracker.closed_trades.to_vec(),
+        BacktestResult::calculate(
+            equity_curve,
+            cash_curve,
             snapshots,
-            orders: order_manager.get_all_orders(),
-            executions: order_manager.trades.clone(),
-        }
+            trade_pnl,
+            order_manager.trade_tracker.closed_trades.to_vec(),
+            initial_capital,
+            order_manager.get_all_orders(),
+            order_manager.trades.clone(),
+        )
     }
 
     // Removed create_backtest_result as it is merged into generate_backtest_result

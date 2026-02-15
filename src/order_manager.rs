@@ -133,20 +133,10 @@ impl OrderManager {
                 );
             }
 
-            // 4. Update Order Filled Quantity & Avg Price
+            // 4. Update Order Commission
+            // Note: filled_quantity and average_filled_price are updated via ExecutionReport
+            // in on_execution_report, so we don't need to accumulate them here to avoid double counting.
             if let Some(order) = self.active_orders.iter_mut().find(|o| o.id == trade.order_id) {
-                let old_qty = order.filled_quantity;
-                let old_avg = order.average_filled_price.unwrap_or(Decimal::ZERO);
-                let old_total = old_qty * old_avg;
-
-                let new_trade_val = trade.quantity * trade.price;
-                let new_total = old_total + new_trade_val;
-                let new_qty = old_qty + trade.quantity;
-
-                if new_qty > Decimal::ZERO {
-                    order.average_filled_price = Some(new_total / new_qty);
-                }
-                order.filled_quantity = new_qty;
                 order.commission += trade.commission;
 
                 // Check if fully filled
