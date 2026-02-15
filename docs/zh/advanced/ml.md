@@ -100,28 +100,36 @@ class WalkForwardStrategy(Strategy):
         X['ret1'] = df['close'].pct_change()
         # 特征 2: 2周期收益率
         X['ret2'] = df['close'].pct_change(2)
-        X = X.fillna(0)
+        # X = X.fillna(0)  # REMOVED: fillna(0) pollutes training data with false signals
 
         if mode == 'inference':
             # 推理模式：只返回最后一行特征，不需要 y
+            # 注意：inference 时传入的 df 是最近 history_depth 的数据
+            # 最后一行是最新的 bar，我们需要它的特征
+            # 但是 pct_change 会导致前几行是 NaN，这没关系，只要最后一行有效即可
             return X.iloc[-1:]
 
         # 训练模式：构造标签 y (预测下一期的涨跌)
         # shift(-1) 把未来的收益挪到当前行作为 label
         future_ret = df['close'].pct_change().shift(-1)
-        y = (future_ret > 0).astype(int)
 
-        # 注意：训练时框架会自动处理最后一行 NaN 的问题
-        # 但为了严谨，我们返回对齐的 X 和 y
-        # 在预测阶段，y 中的最后一行是 NaN (因为不知道未来)，这是正常的
-        return X.iloc[:-1], y.iloc[:-1]
+        # Combine into one DataFrame to align drops
+        data = pd.concat([X, future_ret.rename("future_ret")], axis=1)
+
+        # Drop rows with NaN features (e.g. from history padding or initial pct_change)
+        data = data.dropna(subset=["ret1", "ret2"])
+
+        # For training, we must have a valid future return
+        data = data.dropna(subset=["future_ret"])
+
+        # Calculate y on valid data
+        y = (data["future_ret"] > 0).astype(int)
+        X_clean = data[["ret1", "ret2"]]
+
+        return X_clean, y
 
     def on_bar(self, bar):
         # 3. 实时预测与交易
-
-        # 简单判断模型是否已完成首次训练
-        if self._bar_count < 50:
-            return
 
         # 获取最近的数据进行特征提取
         # 注意：需要足够的历史长度来计算特征 (例如 pct_change(2) 需要至少3根bar)
@@ -173,7 +181,8 @@ if __name__ == "__main__":
         symbol="TEST",
         lot_size=1,
         execution_mode="current_close", # 在当根 bar 结束时撮合
-        history_depth=60
+        history_depth=60,
+        warmup_period=50,
     )
     print("回测结束。")
 

@@ -1,140 +1,149 @@
-import akquant as aq
-import akshare as ak
+from typing import Any, Tuple
+
+import numpy as np
 import pandas as pd
-from akquant import Bar, Strategy
-from akquant.config import BacktestConfig, RiskConfig, StrategyConfig
-
-df = ak.stock_zh_a_daily(symbol="sh600000", start_date="20200131", end_date="20230228")
-
-
-# def generate_data() -> pd.DataFrame:
-#     """Generate dummy data for backtesting."""
-#     n = 1000000  # 精确生成1000万根K线
-
-#     # 1. 生成日期序列（使用periods确保数量精确）
-#     dates = pd.date_range(start="2020-01-01", periods=n, freq="1min")
-
-#     # 2. 生成合理价格序列（关键优化）
-#     # - 收益率均值设为0（避免1000万次累积后价格爆炸/归零）
-#     # - 标准差0.0001（约0.01%波动，符合5分钟K线特征）
-#     # - 使用np.exp避免cumprod数值溢出，更稳定
-#     np.random.seed(42)  # 可复现性（生产环境可移除）
-#     log_returns = np.random.normal(0, 0.0001, n)
-#     price = 100 * np.exp(np.cumsum(log_returns))
-
-#     # 3. 构建DataFrame（内存优化关键）
-#     df = pd.DataFrame(
-#         {
-#             "date": dates,
-#             "open": price.astype(np.float32),  # float32节省50%内存
-#             "high": (price * 1.005).astype(np.float32),  # 缩小振幅至±0.5%更合理
-#             "low": (price * 0.995).astype(np.float32),
-#             "close": price.astype(np.float32),
-#             "volume": np.full(n, 10000, dtype=np.int32),  # int32替代默认int64
-#             "symbol": pd.Categorical(["600000"] * n),  # category类型节省90%+内存
-#         }
-#     )
-
-#     # 4. 强制修正：确保high >= max(open,close) 且 low <= min(open,close)
-#     # （解决原逻辑中open=close导致K线形态失真的问题）
-#     df["high"] = np.maximum(df["high"], np.maximum(df["open"], df["close"]))
-#     df["low"] = np.minimum(df["low"], np.minimum(df["open"], df["close"]))
-
-#     return df
+from akquant import Bar
+from akquant.backtest import run_backtest
+from akquant.ml import SklearnAdapter
+from akquant.strategy import Strategy
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
-# 生成数据（注意：需8-12GB可用内存）
-# df = generate_data()
-
-
-class MyStrategy(Strategy):
-    """
-    Example strategy for testing broker execution.
-
-    This strategy buys on the first bar and holds for 100 bars or until 10% profit.
-    """
+class WalkForwardStrategy(Strategy):
+    """演示策略：使用逻辑回归预测涨跌 (集成 Pipeline 预处理)."""
 
     def __init__(self) -> None:
-        """Initialize strategy state."""
-        self.bars_held: dict[str, int] = {}
-        self.entry_prices: dict[str, float] = {}
+        """初始化策略."""
+        # 1. 初始化模型 (使用 Pipeline 封装预处理和模型)
+        # StandardScaler: 确保使用训练集统计量进行标准化，防止数据泄露
+        pipeline = Pipeline(
+            [("scaler", StandardScaler()), ("model", LogisticRegression())]
+        )
+
+        self.model = SklearnAdapter(pipeline)
+
+        # 2. 配置 Walk-forward Validation
+        # 框架会自动接管数据的切割、模型的重训
+        self.model.set_validation(
+            method="walk_forward",
+            train_window=50,  # 使用过去 50 个 bar 训练
+            rolling_step=10,  # 每 10 个 bar 重训一次
+            frequency="1m",  # 数据频率
+            verbose=True,  # 打印训练日志
+        )
+
+        # 确保历史数据长度足够 (训练窗口 + 特征计算所需窗口)
+        self.set_history_depth(60)
+
+    def prepare_features(
+        self, df: pd.DataFrame, mode: str = "training"
+    ) -> Tuple[pd.DataFrame, Any]:
+        """
+        [必须实现] 特征工程逻辑.
+
+        该函数会被用于训练阶段（生成 X, y）和预测阶段（生成 X）
+        """
+        X = pd.DataFrame()
+        # 特征 1: 1周期收益率
+        X["ret1"] = df["close"].pct_change()
+        # 特征 2: 2周期收益率
+        X["ret2"] = df["close"].pct_change(2)
+        # X = X.fillna(0)  # REMOVED: fillna(0) pollutes training data
+
+        if mode == "inference":
+            # 推理模式：只返回最后一行特征，不需要 y
+            # 注意：inference 时传入的 df 是最近 history_depth 的数据
+            # 最后一行是最新的 bar，我们需要它的特征
+            # 但是 pct_change 会导致前几行是 NaN，这没关系，只要最后一行有效即可
+            return X.iloc[-1:], None
+
+        # 训练模式：构造标签 y (预测下一期的涨跌)
+        # shift(-1) 把未来的收益挪到当前行作为 label
+        future_ret = df["close"].pct_change().shift(-1)
+
+        # Combine into one DataFrame to align drops
+        data = pd.concat([X, future_ret.rename("future_ret")], axis=1)
+
+        # Drop rows with NaN features (e.g. from history padding or initial pct_change)
+        data = data.dropna(subset=["ret1", "ret2"])
+
+        # For training, we must have a valid future return
+        data = data.dropna(subset=["future_ret"])
+
+        # Calculate y on valid data
+        y = (data["future_ret"] > 0).astype(int)
+        X_clean = data[["ret1", "ret2"]]
+
+        return X_clean, y
 
     def on_bar(self, bar: Bar) -> None:
         """
-        Handle bar data event.
+        Bar 数据回调.
 
-        :param bar: The current bar data
+        :param bar: Bar 对象
         """
-        symbol = bar.symbol
-        pos = self.get_position(symbol)
+        # 3. 实时预测与交易
 
-        # 维护持仓计数
-        if pos > 0:
-            if symbol not in self.bars_held:
-                self.bars_held[symbol] = 0
-            self.bars_held[symbol] += 1
-        else:
-            # 如果没有持仓，清理状态
-            if symbol in self.bars_held:
-                del self.bars_held[symbol]
-            if symbol in self.entry_prices:
-                del self.entry_prices[symbol]
+        # 获取最近的数据进行特征提取
+        # 注意：需要足够的历史长度来计算特征 (例如 pct_change(2) 需要至少3根bar)
+        hist_df = self.get_history_df(10)
 
-        # 交易逻辑
-        if pos == 0:
-            # 简单示例：无条件买入
-            print(
-                f"Buy Signal for {symbol}: Open={bar.open}, High={bar.high}, "
-                f"Low={bar.low}, Close={bar.close}"
-            )
-            self.order_target_percent(target_percent=1.0, symbol=symbol)
-            # 初始化计数器 (虽然会在下个 bar 的 pos>0 分支中自增，但这里先占位)
-            self.bars_held[symbol] = 0
-            self.entry_prices[symbol] = bar.close
+        # 复用特征计算逻辑！
+        # 直接调用 prepare_features 获取当前特征
+        X_curr, _ = self.prepare_features(hist_df, mode="inference")
 
-        elif pos > 0:
-            entry_price = self.entry_prices.get(symbol, bar.close)
-            current_bars_held = self.bars_held.get(symbol, 0)
+        try:
+            # 获取预测信号 (概率)
+            # SklearnAdapter 对于二分类返回 Class 1 的概率
+            if self.model:
+                signal = self.model.predict(X_curr)[0]
 
-            # 计算收益率
-            pnl_pct = (bar.close - entry_price) / entry_price
+                # 打印信号方便观察
+                # print(f"Time: {bar.timestamp}, Signal: {signal:.4f}")
 
-            # 止盈条件：收益率 >= 10%
-            if pnl_pct >= 0.10:
-                self.sell(symbol, pos)
-                print(
-                    f"Take Profit Triggered for {symbol}: Entry={entry_price}, "
-                    f"Current={bar.close}, PnL={pnl_pct:.2%}"
-                )
+                # 结合风控规则下单
+                if signal > 0.55:
+                    self.buy(bar.symbol, 100)
+                elif signal < 0.45:
+                    self.sell(bar.symbol, 100)
 
-            # 持仓时间条件：持有满 100 个 Bar
-            elif current_bars_held >= 100:
-                self.sell(symbol, pos)
+        except Exception:
+            # 模型可能尚未初始化或训练失败
+            pass
 
 
-# 配置风险参数：safety_margin
-risk_config = RiskConfig(safety_margin=0.0001)
-strategy_config = StrategyConfig(risk=risk_config)
-backtest_config = BacktestConfig(strategy_config=strategy_config)
+if __name__ == "__main__":
+    # 1. 生成合成数据
+    print("生成测试数据...")
+    dates = pd.date_range(start="2023-01-01", periods=500, freq="1min")
+    # 随机漫步价格
+    price = 100 + np.cumsum(np.random.randn(500))
+    df = pd.DataFrame(
+        {
+            "timestamp": dates,
+            "open": price,
+            "high": price + 1,
+            "low": price - 1,
+            "close": price,
+            "volume": 1000,
+            "symbol": "TEST",
+        }
+    )
 
-engine = aq.Engine()
-engine.set_force_session_continuous(True)
+    # 2. 运行回测
+    print("开始运行机器学习回测...")
+    result = run_backtest(
+        data=df,
+        strategy=WalkForwardStrategy,
+        symbol="TEST",
+        lot_size=1,
+        execution_mode="current_close",  # 在当根 bar 结束时撮合
+        history_depth=60,
+        warmup_period=50,
+    )
+    print("回测结束。")
 
-result = aq.run_backtest(
-    strategy=MyStrategy,
-    data=df,
-    initial_cash=500_000,
-    commission_rate=0.0,
-    stamp_tax_rate=0.0,
-    transfer_fee_rate=0.0,
-    min_commission=0.0,
-    lot_size=1,
-    execution_mode=aq.ExecutionMode.NextHighLowMid,  # type: ignore
-    config=backtest_config,
-)
-
-pd.set_option("display.max_columns", None)
-print(result)
-print(result.cash_curve)
-print(result.orders_df)
-print(result.trades_df)
+    # 3. 打印结果
+    print(result)

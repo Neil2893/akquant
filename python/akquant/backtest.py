@@ -1363,9 +1363,12 @@ def run_backtest(
     except Exception as e:
         logger.debug(f"Failed to infer warmup period: {e}")
 
-    effective_depth = max(
-        strategy_warmup, inferred_warmup, history_depth, warmup_period
-    )
+    # Determine final warmup period
+    final_warmup = max(strategy_warmup, inferred_warmup, warmup_period)
+    # Update strategy instance with the determined warmup period
+    strategy_instance.warmup_period = final_warmup
+
+    effective_depth = max(final_warmup, history_depth)
 
     if effective_depth > 0:
         strategy_instance.set_history_depth(effective_depth)
