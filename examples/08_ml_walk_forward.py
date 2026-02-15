@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,12 @@ class WalkForwardStrategy(Strategy):
 
         print("WalkForwardStrategy initialized")
 
+    def on_train_signal(self, context: Any) -> None:
+        """Override on_train_signal to skip training during warmup."""
+        if self._bar_count < 50:
+            return
+        super().on_train_signal(context)
+
     def prepare_features(
         self, df: pd.DataFrame, mode: str = "training"
     ) -> tuple[pd.DataFrame, pd.Series]:
@@ -49,35 +55,28 @@ class WalkForwardStrategy(Strategy):
         X = pd.DataFrame()
         X["ret1"] = df["close"].pct_change()
         X["ret2"] = df["close"].pct_change(2)
-        X = X.fillna(0)
+        # Remove fillna(0) to avoid treating padded NaNs as valid zero returns
+        # X = X.fillna(0)
 
         # Construct Label y (Next period return)
         # shift(-1) moves future return to current row
         future_ret = df["close"].pct_change().shift(-1)
-        y = (future_ret > 0).astype(int)
 
-        # For training, we usually drop the last row where y is NaN
-        # But for feature generation, we might want to keep X
-        # The auto-training wrapper expects (X, y) to be aligned.
-        # It's safer to return aligned X and y, and let caller slice if needed.
-        # But for Sklearn, NaN in y will crash fit.
+        # Combine into one DataFrame to align drops
+        data = pd.concat([X, future_ret.rename("future_ret")], axis=1)
 
-        # So we align them here:
-        valid_mask = ~y.isna()
-        if valid_mask.all():
-            return cast(pd.DataFrame, X), cast(pd.Series, y)
+        # Drop rows with NaN features (e.g. from history padding or initial pct_change)
+        data = data.dropna(subset=["ret1", "ret2"])
 
-        # If we are training, we need valid y.
-        # But this function is also used for prediction context?
-        # Let's just return full X and y. The framework handles slicing?
-        # No, framework calls model.fit(X, y).
+        if mode == "training":
+            # For training, we must have a valid future return
+            data = data.dropna(subset=["future_ret"])
 
-        # Strategy: Return full data, but drop NaNs in X/y intersection
-        # Actually, let's keep it simple:
-        # This function is primarily for the framework's auto-training loop.
-        # We drop the last row.
+        # Calculate y on valid data
+        y = (data["future_ret"] > 0).astype(int)
+        X_clean = data[["ret1", "ret2"]]
 
-        return cast(pd.DataFrame, X.iloc[:-1]), cast(pd.Series, y.iloc[:-1])
+        return cast(pd.DataFrame, X_clean), cast(pd.Series, y)
 
     def on_bar(self, bar: Bar) -> None:
         """

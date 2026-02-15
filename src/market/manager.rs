@@ -4,7 +4,10 @@ use rust_decimal::prelude::*;
 use std::collections::HashMap;
 
 use crate::model::{Instrument, TradingSession};
-use crate::market::{MarketConfig, MarketModel, SimpleMarketConfig, ChinaMarketConfig, SessionRange};
+use crate::market::{
+    stock, futures, fund, option,
+    MarketConfig, MarketModel, SimpleMarketConfig, ChinaMarketConfig, SessionRange
+};
 
 /// 市场管理器
 /// 负责管理市场配置、市场模型以及相关的费率和交易时段设置
@@ -16,7 +19,14 @@ pub struct MarketManager {
 impl MarketManager {
     /// 创建新的市场管理器
     pub fn new() -> Self {
-        let config = MarketConfig::default();
+        // 默认初始化所有市场配置，保持向后兼容
+        let mut config = ChinaMarketConfig::default();
+        config.stock = Some(stock::StockConfig::default());
+        config.futures = Some(futures::FuturesConfig::default());
+        config.fund = Some(fund::FundConfig::default());
+        config.option = Some(option::OptionConfig::default());
+
+        let config = MarketConfig::China(config);
         Self {
             config: config.clone(),
             model: config.create_model(),
@@ -35,7 +45,12 @@ impl MarketManager {
 
     /// 启用 ChinaMarket (支持 T+1/T+0, 印花税, 过户费, 交易时段等)
     pub fn use_china_market(&mut self) {
-        self.config = MarketConfig::China(ChinaMarketConfig::default());
+        let mut config = ChinaMarketConfig::default();
+        config.stock = Some(stock::StockConfig::default());
+        config.futures = Some(futures::FuturesConfig::default());
+        config.fund = Some(fund::FundConfig::default());
+        config.option = Some(option::OptionConfig::default());
+        self.config = MarketConfig::China(config);
         self.model = self.config.create_model();
     }
 
@@ -44,20 +59,19 @@ impl MarketManager {
     /// :param enabled: 是否启用 T+1
     pub fn set_t_plus_one(&mut self, enabled: bool) {
         if let MarketConfig::China(ref mut c) = self.config {
-            c.stock.t_plus_one = enabled;
-            c.fund.t_plus_one = enabled;
+            c.stock.get_or_insert_with(stock::StockConfig::default).t_plus_one = enabled;
+            c.fund.get_or_insert_with(fund::FundConfig::default).t_plus_one = enabled;
             self.model = self.config.create_model();
         }
     }
 
     /// 启用中国期货市场默认配置
     /// - 切换到 ChinaMarket
-    /// - 设置 T+0
+    /// - 仅启用期货配置
     /// - 保持当前交易时段配置 (需手动设置 set_market_sessions 以匹配特定品种)
     pub fn use_china_futures_market(&mut self) {
         let mut config = ChinaMarketConfig::default();
-        config.stock.t_plus_one = false;
-        config.fund.t_plus_one = false;
+        config.futures = Some(futures::FuturesConfig::default());
         self.config = MarketConfig::China(config);
         self.model = self.config.create_model();
     }
@@ -77,12 +91,13 @@ impl MarketManager {
     ) {
         match &mut self.config {
             MarketConfig::China(c) => {
-                c.stock.commission_rate =
+                let stock = c.stock.get_or_insert_with(stock::StockConfig::default);
+                stock.commission_rate =
                     Decimal::from_f64(commission_rate).unwrap_or(Decimal::ZERO);
-                c.stock.stamp_tax = Decimal::from_f64(stamp_tax).unwrap_or(Decimal::ZERO);
-                c.stock.transfer_fee =
+                stock.stamp_tax = Decimal::from_f64(stamp_tax).unwrap_or(Decimal::ZERO);
+                stock.transfer_fee =
                     Decimal::from_f64(transfer_fee).unwrap_or(Decimal::ZERO);
-                c.stock.min_commission =
+                stock.min_commission =
                     Decimal::from_f64(min_commission).unwrap_or(Decimal::ZERO);
             }
             MarketConfig::Simple(c) => {
@@ -100,7 +115,8 @@ impl MarketManager {
     /// :param commission_rate: 佣金率 (如 0.0001)
     pub fn set_future_fee_rules(&mut self, commission_rate: f64) {
         if let MarketConfig::China(ref mut c) = self.config {
-            c.futures.commission_rate =
+            let futures = c.futures.get_or_insert_with(futures::FuturesConfig::default);
+            futures.commission_rate =
                 Decimal::from_f64(commission_rate).unwrap_or(Decimal::ZERO);
             self.model = self.config.create_model();
         }
@@ -113,11 +129,12 @@ impl MarketManager {
     /// :param min_commission: 最低佣金
     pub fn set_fund_fee_rules(&mut self, commission_rate: f64, transfer_fee: f64, min_commission: f64) {
         if let MarketConfig::China(ref mut c) = self.config {
-            c.fund.commission_rate =
+            let fund = c.fund.get_or_insert_with(fund::FundConfig::default);
+            fund.commission_rate =
                 Decimal::from_f64(commission_rate).unwrap_or(Decimal::ZERO);
-            c.fund.transfer_fee =
+            fund.transfer_fee =
                 Decimal::from_f64(transfer_fee).unwrap_or(Decimal::ZERO);
-            c.fund.min_commission =
+            fund.min_commission =
                 Decimal::from_f64(min_commission).unwrap_or(Decimal::ZERO);
             self.model = self.config.create_model();
         }
@@ -128,7 +145,8 @@ impl MarketManager {
     /// :param commission_per_contract: 每张合约佣金 (如 5.0)
     pub fn set_option_fee_rules(&mut self, commission_per_contract: f64) {
         if let MarketConfig::China(ref mut c) = self.config {
-            c.option.commission_per_contract =
+            let option = c.option.get_or_insert_with(option::OptionConfig::default);
+            option.commission_per_contract =
                 Decimal::from_f64(commission_per_contract).unwrap_or(Decimal::ZERO);
             self.model = self.config.create_model();
         }

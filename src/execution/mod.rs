@@ -13,8 +13,9 @@ pub use realtime::RealtimeExecutionClient;
 pub use simulated::SimulatedExecutionClient;
 pub use slippage::{SlippageModel, FixedSlippage, PercentSlippage, ZeroSlippage};
 
+use crate::context::EngineContext;
 use crate::event::Event;
-use crate::model::{Order, TradingSession};
+use crate::model::Order;
 
 /// 交易执行接口 (Execution Client Trait)
 pub trait ExecutionClient: Send + Sync {
@@ -25,18 +26,7 @@ pub trait ExecutionClient: Send + Sync {
     fn on_cancel(&mut self, order_id: &str);
 
     /// 处理市场事件并返回执行报告
-    fn on_event(
-        &mut self,
-        event: &Event,
-        instruments: &std::collections::HashMap<String, crate::model::Instrument>,
-        portfolio: &crate::portfolio::Portfolio,
-        last_prices: &std::collections::HashMap<String, rust_decimal::Decimal>,
-        // risk_manager: &crate::risk::RiskManager, // Removed: Risk checks are done before Execution
-        market_model: &dyn crate::market::MarketModel,
-        execution_mode: crate::model::ExecutionMode,
-        bar_index: usize,
-        session: TradingSession,
-    ) -> Vec<Event>;
+    fn on_event(&mut self, event: &Event, ctx: &EngineContext) -> Vec<Event>;
 
     /// 设置滑点模型 (仅回测有效)
     fn set_slippage_model(&mut self, _model: Box<dyn SlippageModel>) {}

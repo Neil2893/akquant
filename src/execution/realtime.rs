@@ -1,6 +1,6 @@
 use crate::event::Event;
 use crate::execution::ExecutionClient;
-use crate::model::{Order, TradingSession};
+use crate::model::Order;
 
 /// 实盘执行器 (Realtime Execution Client)
 /// 对接外部交易接口 (如 CTP/Broker API)
@@ -31,18 +31,7 @@ impl ExecutionClient for RealtimeExecutionClient {
         // In real impl, send cancel to broker API
     }
 
-    fn on_event(
-        &mut self,
-        _event: &Event,
-        _instruments: &std::collections::HashMap<String, crate::model::Instrument>,
-        _portfolio: &crate::portfolio::Portfolio,
-        _last_prices: &std::collections::HashMap<String, rust_decimal::Decimal>,
-        // _risk_manager: &crate::risk::RiskManager,
-        _market_model: &dyn crate::market::MarketModel,
-        _execution_mode: crate::model::ExecutionMode,
-        _bar_index: usize,
-        _session: TradingSession,
-    ) -> Vec<Event> {
+    fn on_event(&mut self, _event: &Event, _ctx: &crate::context::EngineContext) -> Vec<Event> {
         // In realtime, this might check for interaction with broker
         Vec::new()
     }

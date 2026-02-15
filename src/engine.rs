@@ -30,6 +30,27 @@ use crate::risk::{RiskConfig, RiskManager};
 use crate::settlement::SettlementManager;
 use crate::statistics::StatisticsManager;
 
+/// Shared state container for Engine
+pub struct SharedState {
+    pub portfolio: Portfolio,
+    pub order_manager: OrderManager,
+    pub feed: DataFeed,
+}
+
+impl SharedState {
+    pub fn new(initial_capital: Decimal) -> Self {
+        Self {
+            portfolio: Portfolio {
+                cash: initial_capital,
+                positions: Arc::new(HashMap::new()),
+                available_positions: Arc::new(HashMap::new()),
+            },
+            order_manager: OrderManager::new(),
+            feed: DataFeed::new(),
+        }
+    }
+}
+
 /// 主回测引擎.
 ///
 /// :ivar feed: 数据源
@@ -39,9 +60,7 @@ use crate::statistics::StatisticsManager;
 #[gen_stub_pyclass]
 #[pyclass]
 pub struct Engine {
-    pub(crate) feed: DataFeed,
-    #[pyo3(get)]
-    pub(crate) portfolio: Portfolio,
+    pub(crate) state: SharedState,
     pub(crate) last_prices: HashMap<String, Decimal>,
     pub(crate) instruments: HashMap<String, Instrument>,
     pub(crate) current_date: Option<NaiveDate>,
@@ -57,7 +76,6 @@ pub struct Engine {
     pub(crate) history_buffer: Arc<RwLock<HistoryBuffer>>,
     pub(crate) initial_capital: Decimal,
     // Components
-    pub(crate) order_manager: OrderManager,
     pub(crate) event_manager: EventManager,
     pub(crate) statistics_manager: StatisticsManager,
     pub(crate) settlement_manager: SettlementManager,
@@ -73,13 +91,25 @@ impl Engine {
     /// 获取订单列表
     #[getter]
     fn get_orders(&self) -> Vec<Order> {
-        self.order_manager.get_all_orders()
+        self.state.order_manager.get_all_orders()
     }
 
     /// 获取成交列表
     #[getter]
     fn get_trades(&self) -> Vec<Trade> {
-        self.order_manager.trades.clone()
+        self.state.order_manager.trades.clone()
+    }
+
+    /// 获取投资组合
+    #[getter]
+    fn get_portfolio(&self) -> Portfolio {
+        self.state.portfolio.clone()
+    }
+
+    /// 获取数据源
+    #[getter]
+    fn get_feed(&self) -> DataFeed {
+        self.state.feed.clone()
     }
 
     /// 获取持仓快照历史
@@ -103,13 +133,9 @@ impl Engine {
     /// :return: Engine 实例
     #[new]
     fn new() -> Self {
+        let initial_capital = Decimal::from(100_000);
         Engine {
-            feed: DataFeed::new(),
-            portfolio: Portfolio {
-                cash: Decimal::from(100_000),
-                positions: Arc::new(HashMap::new()),
-                available_positions: Arc::new(HashMap::new()),
-            },
+            state: SharedState::new(initial_capital),
             last_prices: HashMap::new(),
             instruments: HashMap::new(),
             current_date: None,
@@ -122,8 +148,7 @@ impl Engine {
             risk_manager: RiskManager::new(),
             timezone_offset: 28800, // Default UTC+8
             history_buffer: Arc::new(RwLock::new(HistoryBuffer::new(10000))), // Default large capacity for MAE/MFE
-            initial_capital: Decimal::from(100_000),
-            order_manager: OrderManager::new(),
+            initial_capital,
             event_manager: EventManager::new(),
             statistics_manager: StatisticsManager::new(),
             settlement_manager: SettlementManager::new(),
@@ -330,7 +355,7 @@ impl Engine {
     /// :type cash: float
     fn set_cash(&mut self, cash: f64) {
         let val = Decimal::from_f64(cash).unwrap_or(Decimal::ZERO);
-        self.portfolio.cash = val;
+        self.state.portfolio.cash = val;
         self.initial_capital = val;
     }
 
@@ -339,14 +364,14 @@ impl Engine {
     /// :param feed: 数据源对象
     /// :type feed: DataFeed
     fn add_data(&mut self, feed: DataFeed) {
-        self.feed = feed;
+        self.state.feed = feed;
     }
 
     /// 批量添加 K 线数据
     ///
     /// :param bars: K 线列表
     fn add_bars(&mut self, bars: Vec<Bar>) -> PyResult<()> {
-        self.feed.add_bars(bars)
+        self.state.feed.add_bars(bars)
     }
 
     /// 运行回测
@@ -378,7 +403,7 @@ impl Engine {
         }
 
         // Progress Bar Initialization
-        let total_events = self.feed.len_hint().unwrap_or(0);
+        let total_events = self.state.feed.len_hint().unwrap_or(0);
         let pb = if show_progress {
             let pb = if total_events > 0 {
                 let pb = ProgressBar::new(total_events as u64);
@@ -407,8 +432,9 @@ impl Engine {
         self.progress_bar = pb;
 
         // Record initial equity
-        if let Some(_) = self.feed.peek_timestamp() {
+        if let Some(_) = self.state.feed.peek_timestamp() {
             let _equity = self
+                .state
                 .portfolio
                 .calculate_equity(&self.last_prices, &self.instruments);
         }
@@ -453,17 +479,17 @@ impl Engine {
         }
 
         // Final cleanup
-        self.order_manager.cleanup_finished_orders();
+        self.state.order_manager.cleanup_finished_orders();
 
         // Record final snapshot if we have data
         if self.current_date.is_some() {
             if let Some(timestamp) = self.clock.timestamp() {
                 self.statistics_manager.record_snapshot(
                     timestamp,
-                    &self.portfolio,
+                    &self.state.portfolio,
                     &self.instruments,
                     &self.last_prices,
-                    &self.order_manager.trade_tracker,
+                    &self.state.order_manager.trade_tracker,
                 );
             }
         }
@@ -478,7 +504,7 @@ impl Engine {
         Ok(format!(
             "Backtest finished. Processed {} events. Total Trades: {}",
             count,
-            self.order_manager.trades.len()
+            self.state.order_manager.trades.len()
         ))
     }
 
@@ -487,10 +513,10 @@ impl Engine {
     /// :return: BacktestResult
     fn get_results(&self) -> BacktestResult {
         self.statistics_manager.generate_backtest_result(
-            &self.portfolio,
+            &self.state.portfolio,
             &self.instruments,
             &self.last_prices,
-            &self.order_manager,
+            &self.state.order_manager,
             self.initial_capital,
             self.clock.timestamp(),
         )
@@ -506,13 +532,13 @@ impl Engine {
     ) -> StrategyContext {
         // Create a temporary context for the strategy to use
         StrategyContext::new(
-            self.portfolio.cash,
-            self.portfolio.positions.clone(),
-            self.portfolio.available_positions.clone(),
+            self.state.portfolio.cash,
+            self.state.portfolio.positions.clone(),
+            self.state.portfolio.available_positions.clone(),
             self.clock.session,
             self.clock.timestamp().unwrap_or(0),
             active_orders,
-            self.order_manager.trade_tracker.closed_trades.clone(),
+            self.state.order_manager.trade_tracker.closed_trades.clone(),
             step_trades,
             Some(self.history_buffer.clone()),
             Some(self.event_manager.sender()),
@@ -555,9 +581,9 @@ impl Engine {
         match event {
             Event::Bar(b) => {
                 self.last_prices.insert(b.symbol.clone(), b.close);
-                let step_trades = std::mem::take(&mut self.order_manager.current_step_trades);
+                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
                 // Share active orders via Arc
-                let active_orders = Arc::new(self.order_manager.active_orders.clone());
+                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
                 let ctx = self.create_context(active_orders, step_trades);
                 let py_ctx = Python::attach(|py| {
                     let py_ctx = Py::new(py, ctx).unwrap();
@@ -587,8 +613,8 @@ impl Engine {
             }
             Event::Tick(t) => {
                 self.last_prices.insert(t.symbol.clone(), t.price);
-                let step_trades = std::mem::take(&mut self.order_manager.current_step_trades);
-                let active_orders = Arc::new(self.order_manager.active_orders.clone());
+                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
+                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
                 let ctx = self.create_context(active_orders, step_trades);
                 let py_ctx = Python::attach(|py| {
                     let py_ctx = Py::new(py, ctx).unwrap();
@@ -616,8 +642,8 @@ impl Engine {
                 Ok((new_orders, new_timers, canceled_ids))
             }
             Event::Timer(timer) => {
-                let step_trades = std::mem::take(&mut self.order_manager.current_step_trades);
-                let active_orders = Arc::new(self.order_manager.active_orders.clone());
+                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
+                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
                 let ctx = self.create_context(active_orders, step_trades);
                 let py_ctx = Python::attach(|py| {
                     let py_ctx = Py::new(py, ctx).unwrap();
@@ -659,9 +685,9 @@ mod tests {
     #[test]
     fn test_engine_new() {
         let engine = Engine::new();
-        assert_eq!(engine.portfolio.cash, Decimal::from(100_000));
-        assert!(engine.order_manager.orders.is_empty());
-        assert!(engine.order_manager.trades.is_empty());
+        assert_eq!(engine.state.portfolio.cash, Decimal::from(100_000));
+        assert!(engine.state.order_manager.orders.is_empty());
+        assert!(engine.state.order_manager.trades.is_empty());
         assert_eq!(engine.execution_mode, ExecutionMode::NextOpen);
     }
 
@@ -669,7 +695,7 @@ mod tests {
     fn test_engine_set_cash() {
         let mut engine = Engine::new();
         engine.set_cash(50000.0);
-        assert_eq!(engine.portfolio.cash, Decimal::from(50000));
+        assert_eq!(engine.state.portfolio.cash, Decimal::from(50000));
     }
 
     #[test]

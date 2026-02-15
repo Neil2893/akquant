@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::event::Event;
 use crate::execution::matcher::ExecutionMatcher;
 use crate::execution::slippage::{SlippageModel, ZeroSlippage};
@@ -13,20 +14,22 @@ pub struct SimulatedExecutionClient {
     volume_limit_pct: Decimal, // 成交量限制比例 (0.0 = 不限制)
     pending_orders: Vec<Order>,
     // Matchers
-    stock_matcher: stock::StockMatcher,
-    futures_matcher: futures::FuturesMatcher,
-    option_matcher: option::OptionMatcher,
+    matchers: HashMap<AssetType, Box<dyn ExecutionMatcher>>,
 }
 
 impl SimulatedExecutionClient {
     pub fn new() -> Self {
+        let mut matchers: HashMap<AssetType, Box<dyn ExecutionMatcher>> = HashMap::new();
+        matchers.insert(AssetType::Stock, Box::new(stock::StockMatcher));
+        matchers.insert(AssetType::Fund, Box::new(stock::StockMatcher)); // Fund uses StockMatcher
+        matchers.insert(AssetType::Futures, Box::new(futures::FuturesMatcher));
+        matchers.insert(AssetType::Option, Box::new(option::OptionMatcher));
+
         SimulatedExecutionClient {
             slippage_model: Box::new(ZeroSlippage),
             volume_limit_pct: Decimal::ZERO,
             pending_orders: Vec::new(),
-            stock_matcher: stock::StockMatcher,
-            futures_matcher: futures::FuturesMatcher,
-            option_matcher: option::OptionMatcher,
+            matchers,
         }
     }
 }
@@ -63,28 +66,17 @@ impl ExecutionClient for SimulatedExecutionClient {
         }
     }
 
-    fn on_event(
-        &mut self,
-        event: &Event,
-        instruments: &std::collections::HashMap<String, crate::model::Instrument>,
-        portfolio: &crate::portfolio::Portfolio,
-        last_prices: &std::collections::HashMap<String, rust_decimal::Decimal>,
-        // risk_manager: &crate::risk::RiskManager,
-        market_model: &dyn crate::market::MarketModel,
-        execution_mode: crate::model::ExecutionMode,
-        bar_index: usize,
-        session: TradingSession,
-    ) -> Vec<Event> {
+    fn on_event(&mut self, event: &Event, ctx: &crate::context::EngineContext) -> Vec<Event> {
         let mut reports = Vec::new();
 
         // Skip matching during non-trading sessions
-        if session == TradingSession::Break
-            || session == TradingSession::Closed
-            || session == TradingSession::PreOpen
-            || session == TradingSession::PostClose
+        if ctx.session == TradingSession::Break
+            || ctx.session == TradingSession::Closed
+            || ctx.session == TradingSession::PreOpen
+            || ctx.session == TradingSession::PostClose
         {
             // Also check for Day orders expiry if Closed
-            if session == TradingSession::Closed {
+            if ctx.session == TradingSession::Closed {
                 let timestamp = match event {
                     Event::Bar(b) => b.timestamp,
                     Event::Tick(t) => t.timestamp,
@@ -97,11 +89,11 @@ impl ExecutionClient for SimulatedExecutionClient {
                         && order.status != OrderStatus::Rejected
                         && order.status != OrderStatus::Expired
                     {
-                         if order.time_in_force == TimeInForce::Day {
-                             order.status = OrderStatus::Expired; // Use Expired status
-                             order.updated_at = timestamp;
-                             reports.push(Event::ExecutionReport(order.clone(), None));
-                         }
+                        if order.time_in_force == TimeInForce::Day {
+                            order.status = OrderStatus::Expired;
+                            order.updated_at = timestamp;
+                            reports.push(Event::ExecutionReport(order.clone(), None));
+                        }
                     }
                 }
             }
@@ -109,157 +101,139 @@ impl ExecutionClient for SimulatedExecutionClient {
         }
 
         // Track available margin for this step (snapshot of portfolio + changes in this loop)
-        let mut current_free_margin = portfolio.calculate_free_margin(last_prices, instruments);
+        let mut current_free_margin = ctx.portfolio.calculate_free_margin(ctx.last_prices, ctx.instruments);
 
-        // 实际撮合逻辑：遍历所有挂单，看当前 Event 是否满足成交条件
+        // Iterate pending orders
         for order in self.pending_orders.iter_mut() {
-            // Check for cancellation first
-            if order.status == OrderStatus::Cancelled {
-                reports.push(Event::ExecutionReport(order.clone(), None));
-                continue;
-            }
-
-            if order.status != OrderStatus::New && order.status != OrderStatus::Submitted {
+            if order.status == OrderStatus::Cancelled
+                || order.status == OrderStatus::Filled
+                || order.status == OrderStatus::Rejected
+                || order.status == OrderStatus::Expired
+            {
                 continue;
             }
 
             // Find Instrument
-            if let Some(instrument) = instruments.get(&order.symbol) {
+            if let Some(instrument) = ctx.instruments.get(&order.symbol) {
                 // Dispatch to specific matcher
-                let report_opt = match instrument.asset_type {
-                    AssetType::Stock | AssetType::Fund => self.stock_matcher.match_order(
+                if let Some(matcher) = self.matchers.get(&instrument.asset_type) {
+                    let report_opt = matcher.match_order(
                         order,
                         event,
                         instrument,
-                        execution_mode,
+                        ctx.execution_mode,
                         self.slippage_model.as_ref(),
                         self.volume_limit_pct,
-                        bar_index,
-                    ),
-                    AssetType::Futures => self.futures_matcher.match_order(
-                        order,
-                        event,
-                        instrument,
-                        execution_mode,
-                        self.slippage_model.as_ref(),
-                        self.volume_limit_pct,
-                        bar_index,
-                    ),
-                    AssetType::Option => self.option_matcher.match_order(
-                        order,
-                        event,
-                        instrument,
-                        execution_mode,
-                        self.slippage_model.as_ref(),
-                        self.volume_limit_pct,
-                        bar_index,
-                    ),
-                };
+                        ctx.bar_index,
+                    );
 
-                if let Some(mut report) = report_opt {
-                    // Check for dynamic position sizing (margin check)
-                    if let Event::ExecutionReport(ref mut _r_order, Some(ref mut trade)) = report {
-                        if trade.side == crate::model::OrderSide::Buy {
-                            // Calculate estimated commission
-                            let commission = market_model.calculate_commission(
-                                instrument,
-                                trade.side,
-                                trade.price,
-                                trade.quantity,
-                            );
-
-                            let multiplier = instrument.multiplier();
-                            let margin_ratio = instrument.margin_ratio();
-
-                            // Margin Required = Price * Qty * Multiplier * MarginRatio
-                            let margin_required = trade.price * trade.quantity * multiplier * margin_ratio;
-                            let total_required = margin_required + commission;
-
-                            if total_required > current_free_margin {
-                                // Insufficient margin, reduce quantity
-                                let unit_margin = trade.price * multiplier * margin_ratio;
-                                let mut max_qty = if unit_margin > Decimal::ZERO {
-                                    if current_free_margin <= Decimal::ZERO {
-                                        Decimal::ZERO
-                                    } else {
-                                        current_free_margin / unit_margin
-                                    }
-                                } else {
-                                    Decimal::ZERO
-                                };
-
-                                // Apply safety factor (Default 0.9999 if risk manager not available)
-                                let safety_margin = 0.0001; // risk_manager.config.safety_margin;
-                                let safety_factor = Decimal::from_f64(1.0 - safety_margin)
-                                    .unwrap_or(Decimal::from_f64(0.9999).unwrap());
-                                max_qty = max_qty * safety_factor;
-
-                                let lot_size = instrument.lot_size();
-                                let mut new_qty = max_qty.floor();
-                                if lot_size > Decimal::ZERO {
-                                    new_qty = new_qty - (new_qty % lot_size);
-                                }
-
-                                // Recalculate to ensure it fits
-                                let new_comm = market_model.calculate_commission(
-                                    instrument,
-                                    trade.side,
-                                    trade.price,
-                                    new_qty,
-                                );
-                                let new_margin = trade.price * new_qty * multiplier * margin_ratio;
-
-                                if new_margin + new_comm > current_free_margin {
-                                    if new_qty >= lot_size {
-                                        new_qty -= lot_size;
-                                    } else {
-                                        new_qty = Decimal::ZERO;
-                                    }
-                                }
-
-                                // Update trade quantity
-                                trade.quantity = new_qty;
-                            }
-
-                            // Deduct cost from current_free_margin for next orders in this loop
-                            if trade.quantity > Decimal::ZERO {
-                                let final_comm = market_model.calculate_commission(
+                    if let Some(mut report) = report_opt {
+                        // Check for dynamic position sizing (margin check)
+                        if let Event::ExecutionReport(ref mut _r_order, Some(ref mut trade)) = report {
+                            if trade.side == crate::model::OrderSide::Buy {
+                                // Calculate estimated commission
+                                let commission = ctx.market_model.calculate_commission(
                                     instrument,
                                     trade.side,
                                     trade.price,
                                     trade.quantity,
                                 );
-                                let final_margin = trade.price * trade.quantity * multiplier * margin_ratio;
-                                current_free_margin -= final_margin + final_comm;
+
+                                let multiplier = instrument.multiplier();
+                                let margin_ratio = instrument.margin_ratio();
+
+                                // Margin Required = Price * Qty * Multiplier * MarginRatio
+                                let margin_required = trade.price * trade.quantity * multiplier * margin_ratio;
+                                let total_required = margin_required + commission;
+
+                                if total_required > current_free_margin {
+                                    // Insufficient margin, reduce quantity
+                                    let unit_margin = trade.price * multiplier * margin_ratio;
+                                    let mut max_qty = if unit_margin > Decimal::ZERO {
+                                        if current_free_margin <= Decimal::ZERO {
+                                            Decimal::ZERO
+                                        } else {
+                                            current_free_margin / unit_margin
+                                        }
+                                    } else {
+                                        Decimal::ZERO
+                                    };
+
+                                    // Apply safety factor (Default 0.9999 if risk manager not available)
+                                    let safety_margin = 0.0001;
+                                    let safety_factor = Decimal::from_f64(1.0 - safety_margin)
+                                        .unwrap_or(Decimal::from_f64(0.9999).unwrap());
+                                    max_qty = max_qty * safety_factor;
+
+                                    let lot_size = instrument.lot_size();
+                                    let mut new_qty = max_qty.floor();
+                                    if lot_size > Decimal::ZERO {
+                                        new_qty = new_qty - (new_qty % lot_size);
+                                    }
+
+                                    // Recalculate to ensure it fits
+                                    let new_comm = ctx.market_model.calculate_commission(
+                                        instrument,
+                                        trade.side,
+                                        trade.price,
+                                        new_qty,
+                                    );
+                                    let new_margin = trade.price * new_qty * multiplier * margin_ratio;
+
+                                    if new_margin + new_comm > current_free_margin {
+                                        if new_qty >= lot_size {
+                                            new_qty -= lot_size;
+                                        } else {
+                                            new_qty = Decimal::ZERO;
+                                        }
+                                    }
+
+                                    // Update trade quantity
+                                    trade.quantity = new_qty;
+                                }
+
+                                // Deduct cost from current_free_margin for next orders in this loop
+                                if trade.quantity > Decimal::ZERO {
+                                    let final_comm = ctx.market_model.calculate_commission(
+                                        instrument,
+                                        trade.side,
+                                        trade.price,
+                                        trade.quantity,
+                                    );
+                                    let final_margin = trade.price * trade.quantity * multiplier * margin_ratio;
+                                    current_free_margin -= final_margin + final_comm;
+                                }
                             }
                         }
-                    }
 
-                    // Filter out zero quantity trades
-                    let mut keep_report = true;
-                    if let Event::ExecutionReport(_, Some(ref trade)) = report {
-                        if trade.quantity <= Decimal::ZERO {
-                            keep_report = false;
+                        // Filter out zero quantity trades
+                        let mut keep_report = true;
+                        if let Event::ExecutionReport(_, Some(ref trade)) = report {
+                            if trade.quantity <= Decimal::ZERO {
+                                keep_report = false;
+                            }
+                        }
+
+                        if keep_report {
+                            reports.push(report);
                         }
                     }
-
-                    if keep_report {
-                        reports.push(report);
-                    }
+                } else {
+                    // No matcher found for this asset type, skip or log warning?
+                    // For now just skip
                 }
-            } else {
-                 // No instrument info, skip
             }
         }
 
         // Cleanup filled/cancelled/rejected orders from pending list
-        // Note: We need to do this carefully because `reports` contains the updated order state.
-        // We should mark orders as Filled in `self.pending_orders` if they are reported as Filled.
         for report in &reports {
             if let Event::ExecutionReport(updated_order, _) = report {
                 if let Some(existing) = self.pending_orders.iter_mut().find(|o| o.id == updated_order.id) {
                     existing.status = updated_order.status;
                     existing.filled_quantity = updated_order.filled_quantity;
+                    existing.average_filled_price = updated_order.average_filled_price;
+                    existing.commission = updated_order.commission;
+                    existing.updated_at = updated_order.updated_at;
                 }
             }
         }
@@ -373,19 +347,25 @@ mod tests {
         };
         let last_prices = HashMap::new();
         let _risk_manager = crate::risk::RiskManager::new();
-        let market_config = crate::market::MarketConfig::default();
+
+        let mut china_config = crate::market::ChinaMarketConfig::default();
+        china_config.stock = Some(crate::market::stock::StockConfig::default());
+        let market_config = crate::market::MarketConfig::China(china_config);
+
         let market_model = market_config.create_model();
 
-        let events = sim.on_event(
-            &event,
-            &instruments,
-            &portfolio,
-            &last_prices,
-            market_model.as_ref(),
-            ExecutionMode::NextOpen,
-            0,
-            TradingSession::Continuous
-        );
+        let ctx = crate::context::EngineContext {
+            instruments: &instruments,
+            portfolio: &portfolio,
+            last_prices: &last_prices,
+            market_model: market_model.as_ref(),
+            execution_mode: ExecutionMode::NextOpen,
+            bar_index: 0,
+            session: TradingSession::Continuous,
+            active_orders: &[],
+        };
+
+        let events = sim.on_event(&event, &ctx);
 
         let trades: Vec<crate::model::Trade> = events
             .iter()
@@ -444,19 +424,25 @@ mod tests {
         };
         let last_prices = HashMap::new();
         let _risk_manager = crate::risk::RiskManager::new();
-        let market_config = crate::market::MarketConfig::default();
+
+        let mut china_config = crate::market::ChinaMarketConfig::default();
+        china_config.stock = Some(crate::market::stock::StockConfig::default());
+        let market_config = crate::market::MarketConfig::China(china_config);
+
         let market_model = market_config.create_model();
 
-        let events = sim.on_event(
-            &event,
-            &instruments,
-            &portfolio,
-            &last_prices,
-            market_model.as_ref(),
-            ExecutionMode::NextOpen,
-            0,
-            TradingSession::Continuous
-        );
+        let ctx = crate::context::EngineContext {
+            instruments: &instruments,
+            portfolio: &portfolio,
+            last_prices: &last_prices,
+            market_model: market_model.as_ref(),
+            execution_mode: ExecutionMode::NextOpen,
+            bar_index: 0,
+            session: TradingSession::Continuous,
+            active_orders: &[],
+        };
+
+        let events = sim.on_event(&event, &ctx);
 
         // Should be filled at Limit Price (99)
         let trades: Vec<_> = events.iter().filter_map(|e| if let Event::ExecutionReport(_, Some(t)) = e { Some(t) } else { None }).collect();
@@ -494,19 +480,25 @@ mod tests {
         };
         let last_prices = HashMap::new();
         let _risk_manager = crate::risk::RiskManager::new();
-        let market_config = crate::market::MarketConfig::default();
+
+        let mut china_config = crate::market::ChinaMarketConfig::default();
+        china_config.stock = Some(crate::market::stock::StockConfig::default());
+        let market_config = crate::market::MarketConfig::China(china_config);
+
         let market_model = market_config.create_model();
 
-        let events = sim.on_event(
-            &event,
-            &instruments,
-            &portfolio,
-            &last_prices,
-            market_model.as_ref(),
-            ExecutionMode::NextOpen,
-            0,
-            TradingSession::Continuous
-        );
+        let ctx = crate::context::EngineContext {
+            instruments: &instruments,
+            portfolio: &portfolio,
+            last_prices: &last_prices,
+            market_model: market_model.as_ref(),
+            execution_mode: ExecutionMode::NextOpen,
+            bar_index: 0,
+            session: TradingSession::Continuous,
+            active_orders: &[],
+        };
+
+        let events = sim.on_event(&event, &ctx);
 
         let trades: Vec<_> = events.iter().filter_map(|e| if let Event::ExecutionReport(_, Some(t)) = e { Some(t) } else { None }).collect();
         assert_eq!(trades.len(), 0);
@@ -544,19 +536,25 @@ mod tests {
         };
         let last_prices = HashMap::new();
         let _risk_manager = crate::risk::RiskManager::new();
-        let market_config = crate::market::MarketConfig::default();
+
+        let mut china_config = crate::market::ChinaMarketConfig::default();
+        china_config.stock = Some(crate::market::stock::StockConfig::default());
+        let market_config = crate::market::MarketConfig::China(china_config);
+
         let market_model = market_config.create_model();
 
-        let events = sim.on_event(
-            &event,
-            &instruments,
-            &portfolio,
-            &last_prices,
-            market_model.as_ref(),
-            ExecutionMode::NextOpen,
-            0,
-            TradingSession::Continuous
-        );
+        let ctx = crate::context::EngineContext {
+            instruments: &instruments,
+            portfolio: &portfolio,
+            last_prices: &last_prices,
+            market_model: market_model.as_ref(),
+            execution_mode: ExecutionMode::NextOpen,
+            bar_index: 0,
+            session: TradingSession::Continuous,
+            active_orders: &[],
+        };
+
+        let events = sim.on_event(&event, &ctx);
 
         let trades: Vec<_> = events.iter().filter_map(|e| if let Event::ExecutionReport(_, Some(t)) = e { Some(t) } else { None }).collect();
         assert_eq!(trades.len(), 1);

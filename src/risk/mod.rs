@@ -194,9 +194,7 @@ pub struct RiskManager {
     // Internal fields, not exposed to Python directly (unless we add getters)
     // No #[pyo3(skip)] needed as fields are private by default in #[pyclass]
     common_rules: Vec<Box<dyn RiskRule>>,
-    stock_rules: Vec<Box<dyn RiskRule>>,
-    futures_rules: Vec<Box<dyn RiskRule>>,
-    option_rules: Vec<Box<dyn RiskRule>>,
+    asset_rules: HashMap<AssetType, Vec<Box<dyn RiskRule>>>,
 }
 
 impl Default for RiskManager {
@@ -204,9 +202,7 @@ impl Default for RiskManager {
         let mut manager = Self {
             config: RiskConfig::new(),
             common_rules: Vec::new(),
-            stock_rules: Vec::new(),
-            futures_rules: Vec::new(),
-            option_rules: Vec::new(),
+            asset_rules: HashMap::new(),
         };
         manager.init_rules();
         manager
@@ -235,12 +231,25 @@ impl RiskManager {
             } else {
             HashMap::new()
         };
+
+        // Create a dummy market model for context
+        use crate::market::{SimpleMarket, SimpleMarketConfig};
+        let market_model = SimpleMarket::from_config(SimpleMarketConfig::default());
+
+        let ctx = crate::context::EngineContext {
+            instruments: &instruments,
+            portfolio,
+            last_prices: &prices_dec,
+            market_model: &market_model,
+            execution_mode: crate::model::ExecutionMode::NextOpen,
+            bar_index: 0,
+            session: crate::model::TradingSession::Continuous,
+            active_orders: &active_orders,
+        };
+
         match self.check_internal(
             order,
-            portfolio,
-            &instruments,
-            &active_orders,
-            &prices_dec,
+            &ctx,
         ) {
             Ok(_) => None,
             Err(e) => Some(e.to_string()),
@@ -258,43 +267,35 @@ impl RiskManager {
         self.common_rules.push(Box::new(CashMarginRule));
 
         // Stock rules
-        self.stock_rules.push(Box::new(StockAvailablePositionRule));
+        self.asset_rules.entry(AssetType::Stock).or_default().push(Box::new(StockAvailablePositionRule));
+        self.asset_rules.entry(AssetType::Fund).or_default().push(Box::new(StockAvailablePositionRule));
 
         // Futures rules
-        self.futures_rules.push(Box::new(FuturesMarginRule));
+        self.asset_rules.entry(AssetType::Futures).or_default().push(Box::new(FuturesMarginRule));
 
         // Option rules
-        self.option_rules.push(Box::new(OptionGreekRiskRule));
+        self.asset_rules.entry(AssetType::Option).or_default().push(Box::new(OptionGreekRiskRule));
     }
 
     pub fn check_and_adjust(
         &self,
         order: &mut Order,
-        portfolio: &Portfolio,
-        instruments: &HashMap<String, Instrument>,
-        active_orders: &[Order],
-        last_prices: &HashMap<String, Decimal>,
+        ctx: &crate::context::EngineContext,
     ) -> Result<(), AkQuantError> {
         // 1. Initial Check
-        if let Err(err) = self.check_internal(
-            order,
-            portfolio,
-            instruments,
-            active_orders,
-            last_prices,
-        ) {
+        if let Err(err) = self.check_internal(order, ctx) {
             let err_msg = err.to_string();
             // Check for insufficient cash/margin to attempt auto-reduction
             // This logic was moved from OrderManager
             if (err_msg.contains("Insufficient cash") || err_msg.contains("Insufficient margin"))
                 && order.side == crate::model::OrderSide::Buy
             {
-                if let Some(instr) = instruments.get(&order.symbol) {
+                if let Some(instr) = ctx.instruments.get(&order.symbol) {
                     // Get price (Limit or Last)
                     let price = if let Some(p) = order.price {
                         p
                     } else {
-                        *last_prices
+                        *ctx.last_prices
                             .get(&order.symbol)
                             .unwrap_or(&Decimal::ZERO)
                     };
@@ -314,7 +315,7 @@ impl RiskManager {
                             // If we want to support margin trading correctly here, we should check what check_internal failed on.
 
                             // For now, let's use a simplified calculation similar to old OrderManager
-                            let max_qty_raw = portfolio.cash / cost_per_unit;
+                            let max_qty_raw = ctx.portfolio.cash / cost_per_unit;
 
                             // Buffer for commission (e.g. 1% buffer -> 0.9999 safety factor from config)
                             let safety_margin = self.config.safety_margin;
@@ -332,13 +333,7 @@ impl RiskManager {
                             if new_qty > Decimal::ZERO && new_qty < order.quantity {
                                 order.quantity = new_qty;
                                 // Re-check with new quantity
-                                return self.check_internal(
-                                    order,
-                                    portfolio,
-                                    instruments,
-                                    active_orders,
-                                    last_prices,
-                                );
+                                return self.check_internal(order, ctx);
                             }
                         }
                     }
@@ -352,33 +347,42 @@ impl RiskManager {
     pub fn check_internal(
         &self,
         order: &Order,
-        portfolio: &Portfolio,
-        instruments: &HashMap<String, Instrument>,
-        active_orders: &[Order],
-        current_prices: &HashMap<String, Decimal>,
+        ctx: &crate::context::EngineContext,
     ) -> Result<(), AkQuantError> {
         if !self.config.active {
             return Ok(());
         }
 
-        let instrument = instruments.get(&order.symbol).ok_or_else(|| {
+        let instrument = ctx.instruments.get(&order.symbol).ok_or_else(|| {
             AkQuantError::OrderError(format!("Instrument not found for {}", order.symbol))
         })?;
 
         // Check common rules
         for rule in &self.common_rules {
-            rule.check(order, portfolio, instrument, instruments, active_orders, current_prices, &self.config)?;
+            rule.check(
+                order,
+                ctx.portfolio,
+                instrument,
+                ctx.instruments,
+                ctx.active_orders,
+                ctx.last_prices,
+                &self.config,
+            )?;
         }
 
         // Check asset-specific rules
-        let rules = match instrument.asset_type {
-            AssetType::Stock | AssetType::Fund => &self.stock_rules,
-            AssetType::Futures => &self.futures_rules,
-            AssetType::Option => &self.option_rules,
-        };
-
-        for rule in rules {
-            rule.check(order, portfolio, instrument, instruments, active_orders, current_prices, &self.config)?;
+        if let Some(rules) = self.asset_rules.get(&instrument.asset_type) {
+            for rule in rules {
+                rule.check(
+                    order,
+                    ctx.portfolio,
+                    instrument,
+                    ctx.instruments,
+                    ctx.active_orders,
+                    ctx.last_prices,
+                    &self.config,
+                )?;
+            }
         }
 
         Ok(())

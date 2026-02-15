@@ -1,8 +1,13 @@
 use crate::analysis::ClosedTrade;
 use crate::event::Event;
 use crate::history::HistoryBuffer;
+use crate::market::MarketModel;
 use crate::model::market_data::extract_decimal;
-use crate::model::{Order, OrderSide, OrderType, TimeInForce, Timer, Trade, TradingSession};
+use crate::model::{
+    ExecutionMode, Instrument, Order, OrderSide, OrderType, TimeInForce, Timer, Trade,
+    TradingSession,
+};
+use crate::portfolio::Portfolio;
 use crate::risk::RiskConfig;
 use numpy::PyArray1;
 use pyo3::prelude::*;
@@ -10,8 +15,21 @@ use pyo3_stub_gen::derive::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock, mpsc::Sender};
+use std::sync::{mpsc::Sender, Arc, RwLock};
 use uuid::Uuid;
+
+/// 引擎上下文 (Engine Context)
+/// 用于在 Rust 内部组件之间传递共享状态
+pub struct EngineContext<'a> {
+    pub instruments: &'a HashMap<String, Instrument>,
+    pub portfolio: &'a Portfolio,
+    pub last_prices: &'a HashMap<String, Decimal>,
+    pub market_model: &'a dyn MarketModel,
+    pub execution_mode: ExecutionMode,
+    pub bar_index: usize,
+    pub session: TradingSession,
+    pub active_orders: &'a [Order],
+}
 
 #[gen_stub_pyclass]
 #[pyclass]

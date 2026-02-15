@@ -64,7 +64,7 @@ impl pyo3_stub_gen::PyStubType for SettlementType {
 }
 
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 资产类型
 pub enum AssetType {
     Stock,
