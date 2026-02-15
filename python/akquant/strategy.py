@@ -695,9 +695,14 @@ class Strategy:
         self.current_tick = None
         self._last_prices[bar.symbol] = bar.close
 
+        self._bar_count += 1
+
+        # Check warmup period
+        if self._bar_count < self.warmup_period:
+            return
+
         # 检查滚动训练信号
         if self._rolling_step > 0:
-            self._bar_count += 1
             if self._bar_count % self._rolling_step == 0:
                 # 触发训练信号，传入 self 作为 context
                 self.on_train_signal(self)

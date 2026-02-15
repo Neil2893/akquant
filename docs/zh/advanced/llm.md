@@ -120,11 +120,11 @@ class MovingAverageStrategy(Strategy):
 2.  **Workflow**:
     *   Initialize model in `__init__` (e.g., `self.model = SklearnAdapter(...)`).
     *   Configure validation via `self.model.set_validation(method='walk_forward', ...)` to enable auto-retraining.
-    *   Implement `prepare_features(self, df)` to generate X, y for **training**.
-    *   In `on_bar`, perform **inference** using manual feature extraction (or carefully reused logic) and `self.model.predict(X)`.
+    *   Implement `prepare_features(self, df, mode='training')` to generate X, y for **training**.
+    *   In `on_bar`, perform **inference** by calling `self.prepare_features(hist_df, mode='inference')` and then `self.model.predict(X)`.
 3.  **Data Handling**:
-    *   **Training**: The framework calls `prepare_features` automatically during rolling windows. `df` contains historical bars. You must return `(X, y)` where `y` is aligned with `X`. Typically, `y` is shifted (future return), so you must drop the last row of `X` and `y` to remove NaNs.
-    *   **Inference**: In `on_bar`, you need features for the *current* moment to predict the *next* step. You cannot use `prepare_features` directly if it drops the last row. You should manually construct `X_curr` from `self.get_history_df`.
+    *   **Training**: The framework calls `prepare_features(df, mode='training')` automatically during rolling windows. `df` contains historical bars. You must return `(X, y)` where `y` is aligned with `X`. Typically, `y` is shifted (future return), so you must drop rows with NaNs.
+    *   **Inference**: In `on_bar`, call `prepare_features(df, mode='inference')` to get features for the *current* moment. The logic should return the last row of features (X) corresponding to the current bar.
 
 ### Example ML Strategy (Reference)
 
@@ -152,35 +152,34 @@ class MLStrategy(Strategy):
         # Ensure history depth covers training window
         self.set_history_depth(250)
 
-    def prepare_features(self, df: pd.DataFrame):
+    def prepare_features(self, df: pd.DataFrame, mode: str = "training"):
         """Called by framework for TRAINING data preparation"""
         X = pd.DataFrame()
         X['ret1'] = df['close'].pct_change()
         X['ret2'] = df['close'].pct_change(2)
-        X = X.fillna(0)
+        # X = X.fillna(0) # Avoid polluting data with 0s
 
-        # Label: Next period return > 0
+        if mode == 'inference':
+            # Inference: Return only the last row (latest features)
+            # Input df contains history + current bar
+            return X.iloc[-1:]
+
+        # Training: Construct labels
         future_ret = df['close'].pct_change().shift(-1)
-        y = (future_ret > 0).astype(int)
 
-        # Align X and y (Drop last row where y is NaN)
-        return X.iloc[:-1], y.iloc[:-1]
+        # Combine and drop NaNs
+        data = pd.concat([X, future_ret.rename("y")], axis=1)
+        data = data.dropna()
+
+        return data[['ret1', 'ret2']], (data['y'] > 0).astype(int)
 
     def on_bar(self, bar: Bar):
-        # Wait for initial training
-        if self._bar_count < 200:
-            return
-
         # 3. Inference (Real-time)
         # Get recent history to construct current features
-        hist_df = self.get_history_df(5)
+        hist_df = self.get_history_df(10) # Need enough history for features
 
-        # Manual Feature Extraction (Must match prepare_features logic)
-        curr_ret1 = (bar.close - hist_df['close'].iloc[-2]) / hist_df['close'].iloc[-2]
-        curr_ret2 = (bar.close - hist_df['close'].iloc[-3]) / hist_df['close'].iloc[-3]
-
-        X_curr = pd.DataFrame([[curr_ret1, curr_ret2]], columns=['ret1', 'ret2'])
-        X_curr = X_curr.fillna(0)
+        # Reuse prepare_features logic!
+        X_curr = self.prepare_features(hist_df, mode='inference')
 
         try:
             # Predict
