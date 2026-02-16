@@ -49,6 +49,8 @@ jobs:
         run: mkdir -p ~/.cargo/registry ~/.cargo/git
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: -D__ARM_ARCH=8
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -60,6 +62,45 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: wheels-linux-${{ matrix.target }}
+          path: dist
+
+  linux-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-registry-linux-musl-aarch64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-linux-musl-aarch64-
+      - name: Prepare cargo dirs
+        run: mkdir -p ~/.cargo/registry ~/.cargo/git
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS_aarch64_unknown_linux_musl: -D__ARM_ARCH=8
+        with:
+          target: aarch64-unknown-linux-musl
+          args: --release --out dist --find-interpreter
+          sccache: 'true'
+          manylinux: musllinux_1_2
+          docker-options: -v /home/runner/.cargo/registry:/root/.cargo/registry -v /home/runner/.cargo/git:/root/.cargo/git
+      - name: Upload wheels
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels-linux-musllinux-aarch64
           path: dist
 
   windows:
@@ -135,7 +176,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [linux, windows, macos, sdist]
+    needs: [linux, linux-musl, windows, macos, sdist]
     permissions:
       id-token: write
       contents: write
