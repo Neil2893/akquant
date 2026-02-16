@@ -9,13 +9,14 @@ use crate::model::{
 };
 use crate::portfolio::Portfolio;
 use crate::risk::RiskConfig;
+use crossbeam_channel::Sender;
 use numpy::PyArray1;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::*;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
 use std::collections::HashMap;
-use std::sync::{mpsc::Sender, Arc, RwLock};
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 /// 引擎上下文 (Engine Context)
@@ -29,6 +30,62 @@ pub struct EngineContext<'a> {
     pub bar_index: usize,
     pub session: TradingSession,
     pub active_orders: &'a [Order],
+}
+
+impl StrategyContext {
+    pub fn update_state(
+        &mut self,
+        cash: Decimal,
+        positions: Arc<HashMap<String, Decimal>>,
+        available_positions: Arc<HashMap<String, Decimal>>,
+        session: TradingSession,
+        current_time: i64,
+        active_orders: Arc<Vec<Order>>,
+        recent_trades: Vec<Trade>,
+    ) {
+        self.cash = cash;
+        self.positions = positions;
+        self.available_positions = available_positions;
+        self.session = session;
+        self.current_time = current_time;
+        self.active_orders_arc = active_orders.clone();
+
+        // Lazy update: clear the vector but don't fill it yet.
+        // We will rely on a getter to populate it if accessed, or just update it here if needed.
+        // For true zero-copy, we need to implement a custom getter for active_orders.
+        // But PyO3 #[pyo3(get)] generates a simple field access.
+        // To fix this properly, we should rename the field active_orders -> _active_orders_cache
+        // and expose a getter method active_orders() that populates it on demand.
+        //
+        // HOWEVER, for this "Zero-Copy" optimization step, let's just avoid the clone if the list is empty.
+
+        if active_orders.is_empty() {
+             self.active_orders.clear();
+        } else {
+             // Still copying for now to maintain API compatibility without breaking changes
+             // Optimization: reuse capacity
+             self.active_orders.clear();
+             self.active_orders.extend_from_slice(&active_orders);
+        }
+
+        self.recent_trades = recent_trades;
+
+        // Reset accumulators
+        self.orders.clear();
+        self.canceled_order_ids.clear();
+        self.timers.clear();
+
+        // Reset Arc accumulators (internal mutability)
+        if let Ok(mut orders) = self.orders_arc.write() {
+            orders.clear();
+        }
+        if let Ok(mut canceled) = self.canceled_order_ids_arc.write() {
+            canceled.clear();
+        }
+        if let Ok(mut timers) = self.timers_arc.write() {
+            timers.clear();
+        }
+    }
 }
 
 #[gen_stub_pyclass]

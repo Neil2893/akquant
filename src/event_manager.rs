@@ -1,7 +1,4 @@
-use std::sync::{
-    mpsc::{self, Receiver, Sender},
-    Mutex,
-};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::event::Event;
 
@@ -10,20 +7,20 @@ use crate::event::Event;
 /// 负责事件队列的分发和处理
 pub struct EventManager {
     tx: Sender<Event>,
-    rx: Option<Mutex<Receiver<Event>>>,
+    rx: Option<Receiver<Event>>,
 }
 
 impl EventManager {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = unbounded();
         EventManager {
             tx,
-            rx: Some(Mutex::new(rx)),
+            rx: Some(rx),
         }
     }
 
     /// 发送事件
-    pub fn send(&self, event: Event) -> Result<(), std::sync::mpsc::SendError<Event>> {
+    pub fn send(&self, event: Event) -> Result<(), crossbeam_channel::SendError<Event>> {
         self.tx.send(event)
     }
 
@@ -34,28 +31,27 @@ impl EventManager {
 
     /// 尝试接收事件 (非阻塞)
     pub fn try_recv(&self) -> Option<Event> {
-        if let Some(rx_mutex) = &self.rx {
-            if let Ok(rx) = rx_mutex.lock() {
-                if let Ok(event) = rx.try_recv() {
-                    return Some(event);
-                }
-            }
+        if let Some(rx) = &self.rx {
+             match rx.try_recv() {
+                Ok(event) => Some(event),
+                Err(_) => None,
+             }
+        } else {
+            None
         }
-        None
     }
 
     /// 接收事件 (阻塞)
-    /// 注意：如果 rx 被其他线程锁住，这里也会阻塞等待锁
     #[allow(dead_code)]
     pub fn recv(&self) -> Option<Event> {
-        if let Some(rx_mutex) = &self.rx {
-            if let Ok(rx) = rx_mutex.lock() {
-                if let Ok(event) = rx.recv() {
-                    return Some(event);
-                }
+        if let Some(rx) = &self.rx {
+            match rx.recv() {
+                Ok(event) => Some(event),
+                Err(_) => None,
             }
+        } else {
+            None
         }
-        None
     }
 }
 

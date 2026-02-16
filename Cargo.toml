@@ -1,6 +1,6 @@
 [package]
 name = "akquant"
-version = "0.1.41"
+version = "0.1.42"
 edition = "2024"
 description = "High-performance quantitative trading framework based on Rust and Python"
 license = "MIT"
@@ -30,8 +30,9 @@ csv = "1.3"
 thiserror = "2.0.18"
 rust_decimal_macros = "1.40"
 log = "0.4"
+crossbeam-channel = "0.5"
 
 [features]
-default = ["extension-module"]
+default = []
 extension-module = ["pyo3/extension-module"]
 test-utils = ["pyo3/auto-initialize"]

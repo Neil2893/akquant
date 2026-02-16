@@ -145,9 +145,9 @@ class WalkForwardStrategy(Strategy):
 
 if __name__ == "__main__":
     # 生成合成数据
-    dates = pd.date_range(start="2023-01-01", periods=200, freq="1min")
+    dates = pd.date_range(start="2023-01-01", periods=20000, freq="1min")
     # 随机漫步价格
-    price = 100 + np.cumsum(np.random.randn(200))
+    price = 100 + np.cumsum(np.random.randn(20000))
     df = pd.DataFrame(
         {
             "timestamp": dates,

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::model::{Instrument, TradingSession};
 use crate::market::{
     stock, futures, fund, option,
-    MarketConfig, MarketModel, SimpleMarketConfig, ChinaMarketConfig, SessionRange
+    ChinaMarketConfig, MarketConfig, MarketModel, SessionRange, SimpleMarketConfig,
 };
 
 /// 市场管理器

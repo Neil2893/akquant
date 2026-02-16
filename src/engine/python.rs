@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::NaiveDate;
 use indicatif::{ProgressBar, ProgressStyle};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -9,81 +9,21 @@ use std::sync::{Arc, RwLock};
 
 use crate::analysis::{BacktestResult, PositionSnapshot};
 use crate::clock::Clock;
-use crate::context::StrategyContext;
 use crate::data::DataFeed;
-use crate::event::Event;
 use crate::event_manager::EventManager;
-use crate::execution::{ExecutionClient, RealtimeExecutionClient, SimulatedExecutionClient};
+use crate::execution::{RealtimeExecutionClient, SimulatedExecutionClient};
 use crate::history::HistoryBuffer;
 use crate::market::manager::MarketManager;
 use crate::model::{
-    Bar, ExecutionMode, Instrument, Order, Timer, Trade, TradingSession,
+    Bar, ExecutionMode, Instrument, Order, Trade, TradingSession,
 };
-use crate::order_manager::OrderManager;
-use crate::pipeline::stages::{
-    ChannelProcessor, CleanupProcessor, DataProcessor, ExecutionPhase, ExecutionProcessor,
-    StatisticsProcessor, StrategyProcessor,
-};
-use crate::pipeline::PipelineRunner;
 use crate::portfolio::Portfolio;
 use crate::risk::{RiskConfig, RiskManager};
 use crate::settlement::SettlementManager;
 use crate::statistics::StatisticsManager;
 
-/// Shared state container for Engine
-pub struct SharedState {
-    pub portfolio: Portfolio,
-    pub order_manager: OrderManager,
-    pub feed: DataFeed,
-}
-
-impl SharedState {
-    pub fn new(initial_capital: Decimal) -> Self {
-        Self {
-            portfolio: Portfolio {
-                cash: initial_capital,
-                positions: Arc::new(HashMap::new()),
-                available_positions: Arc::new(HashMap::new()),
-            },
-            order_manager: OrderManager::new(),
-            feed: DataFeed::new(),
-        }
-    }
-}
-
-/// 主回测引擎.
-///
-/// :ivar feed: 数据源
-/// :ivar portfolio: 投资组合
-/// :ivar orders: 订单列表
-/// :ivar trades: 成交列表
-#[gen_stub_pyclass]
-#[pyclass]
-pub struct Engine {
-    pub(crate) state: SharedState,
-    pub(crate) last_prices: HashMap<String, Decimal>,
-    pub(crate) instruments: HashMap<String, Instrument>,
-    pub(crate) current_date: Option<NaiveDate>,
-    pub(crate) market_manager: MarketManager,
-    pub(crate) execution_model: Box<dyn ExecutionClient>,
-    pub(crate) execution_mode: ExecutionMode,
-    pub(crate) clock: Clock,
-    pub(crate) timers: BinaryHeap<Timer>, // Min-Heap via Timer's Ord implementation
-    pub(crate) force_session_continuous: bool,
-    #[pyo3(get, set)]
-    pub risk_manager: RiskManager,
-    pub(crate) timezone_offset: i32,
-    pub(crate) history_buffer: Arc<RwLock<HistoryBuffer>>,
-    pub(crate) initial_capital: Decimal,
-    // Components
-    pub(crate) event_manager: EventManager,
-    pub(crate) statistics_manager: StatisticsManager,
-    pub(crate) settlement_manager: SettlementManager,
-    // Pipeline state
-    pub(crate) current_event: Option<Event>,
-    pub(crate) bar_count: usize,
-    pub(crate) progress_bar: Option<ProgressBar>,
-}
+use super::core::Engine;
+use super::state::SharedState;
 
 #[gen_stub_pymethods]
 #[pymethods]
@@ -132,7 +72,7 @@ impl Engine {
     ///
     /// :return: Engine 实例
     #[new]
-    fn new() -> Self {
+    pub fn new() -> Self {
         let initial_capital = Decimal::from(100_000);
         Engine {
             state: SharedState::new(initial_capital),
@@ -155,6 +95,7 @@ impl Engine {
             current_event: None,
             bar_count: 0,
             progress_bar: None,
+            strategy_context: None,
         }
     }
 
@@ -168,7 +109,7 @@ impl Engine {
     /// 设置时区偏移 (秒)
     ///
     /// :param offset: 偏移秒数 (例如 UTC+8 为 28800)
-    fn set_timezone(&mut self, offset: i32) {
+    pub fn set_timezone(&mut self, offset: i32) {
         self.timezone_offset = offset;
     }
 
@@ -250,7 +191,7 @@ impl Engine {
     /// :param stamp_tax: 印花税率 (如 0.001)
     /// :param transfer_fee: 过户费率 (如 0.00002)
     /// :param min_commission: 最低佣金 (如 5.0)
-    fn set_stock_fee_rules(
+    pub fn set_stock_fee_rules(
         &mut self,
         commission_rate: f64,
         stamp_tax: f64,
@@ -268,7 +209,7 @@ impl Engine {
     /// 设置期货费率规则
     ///
     /// :param commission_rate: 佣金率 (如 0.0001)
-    fn set_future_fee_rules(&mut self, commission_rate: f64) {
+    pub fn set_future_fee_rules(&mut self, commission_rate: f64) {
         self.market_manager.set_future_fee_rules(commission_rate);
     }
 
@@ -354,7 +295,7 @@ impl Engine {
     ///
     /// :param instrument: 交易标的对象
     /// :type instrument: Instrument
-    fn add_instrument(&mut self, instrument: Instrument) {
+    pub fn add_instrument(&mut self, instrument: Instrument) {
         self.instruments
             .insert(instrument.symbol().to_string(), instrument);
     }
@@ -363,7 +304,7 @@ impl Engine {
     ///
     /// :param cash: 初始资金数额
     /// :type cash: float
-    fn set_cash(&mut self, cash: f64) {
+    pub fn set_cash(&mut self, cash: f64) {
         let val = Decimal::from_f64(cash).unwrap_or(Decimal::ZERO);
         self.state.portfolio.cash = val;
         self.initial_capital = val;
@@ -450,36 +391,7 @@ impl Engine {
         }
 
         // Initialize Pipeline
-        let mut pipeline = PipelineRunner::new();
-        // 1. Process events from previous iteration (or init)
-        pipeline.add_processor(Box::new(ChannelProcessor));
-
-        // 2. Fetch new Data Event
-        pipeline.add_processor(Box::new(DataProcessor::new()));
-
-        // 3. Pre-Strategy Execution (Match Pending Orders)
-        // For NextOpen/NextAverage: Matches orders generated in previous bar against current bar.
-        pipeline.add_processor(Box::new(ExecutionProcessor::new(ExecutionPhase::PreStrategy)));
-
-        // 4. Process Fills from Pre-Execution immediately (Update Portfolio before Strategy)
-        pipeline.add_processor(Box::new(ChannelProcessor));
-
-        // 5. Run Strategy
-        pipeline.add_processor(Box::new(StrategyProcessor));
-
-        // 6. Process Order Requests from Strategy immediately (Validate -> Pending)
-        pipeline.add_processor(Box::new(ChannelProcessor));
-
-        // 7. Post-Strategy Execution
-        // For CurrentClose: Matches orders generated in current bar against current bar.
-        pipeline.add_processor(Box::new(ExecutionProcessor::new(ExecutionPhase::PostStrategy)));
-
-        // 8. Process Fills from Post-Execution
-        pipeline.add_processor(Box::new(ChannelProcessor));
-
-        // 9. Statistics & Cleanup
-        pipeline.add_processor(Box::new(StatisticsProcessor));
-        pipeline.add_processor(Box::new(CleanupProcessor));
+        let mut pipeline = self.build_pipeline();
 
         // Run Pipeline
         if let Err(e) = pipeline.run(self, py, strategy) {
@@ -530,221 +442,5 @@ impl Engine {
             self.initial_capital,
             self.clock.timestamp(),
         )
-    }
-}
-
-// Private helper methods
-impl Engine {
-    fn create_context(
-        &self,
-        active_orders: Arc<Vec<Order>>,
-        step_trades: Vec<Trade>,
-    ) -> StrategyContext {
-        // Create a temporary context for the strategy to use
-        StrategyContext::new(
-            self.state.portfolio.cash,
-            self.state.portfolio.positions.clone(),
-            self.state.portfolio.available_positions.clone(),
-            self.clock.session,
-            self.clock.timestamp().unwrap_or(0),
-            active_orders,
-            self.state.order_manager.trade_tracker.closed_trades.clone(),
-            step_trades,
-            Some(self.history_buffer.clone()),
-            Some(self.event_manager.sender()),
-            self.risk_manager.config.clone(),
-        )
-    }
-
-    pub(crate) fn datetime_from_ns(timestamp: i64) -> DateTime<Utc> {
-        let secs = timestamp.div_euclid(1_000_000_000);
-        let nanos = timestamp.rem_euclid(1_000_000_000) as u32;
-        Utc.timestamp_opt(secs, nanos)
-            .single()
-            .expect("Invalid timestamp")
-    }
-
-    pub(crate) fn local_datetime_from_ns(timestamp: i64, offset_secs: i32) -> DateTime<Utc> {
-        let offset_ns = i64::from(offset_secs) * 1_000_000_000;
-        Self::datetime_from_ns(timestamp + offset_ns)
-    }
-
-    fn parse_time_string(value: &str) -> PyResult<NaiveTime> {
-        if let Ok(t) = NaiveTime::parse_from_str(value, "%H:%M:%S") {
-            return Ok(t);
-        }
-        if let Ok(t) = NaiveTime::parse_from_str(value, "%H:%M") {
-            return Ok(t);
-        }
-        Err(PyValueError::new_err(format!(
-            "Invalid time format: {}",
-            value
-        )))
-    }
-
-    pub(crate) fn call_strategy(
-        &mut self,
-        strategy: &Bound<'_, PyAny>,
-        event: &Event,
-    ) -> PyResult<(Vec<Order>, Vec<Timer>, Vec<String>)> {
-        // Update Last Price and Trigger Strategy
-        match event {
-            Event::Bar(b) => {
-                self.last_prices.insert(b.symbol.clone(), b.close);
-                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
-                // Share active orders via Arc
-                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
-                let ctx = self.create_context(active_orders, step_trades);
-                let py_ctx = Python::attach(|py| {
-                    let py_ctx = Py::new(py, ctx).unwrap();
-                    let args = (b.clone(), py_ctx.clone_ref(py));
-                    strategy.call_method1("_on_bar_event", args)?;
-                    Ok::<_, PyErr>(py_ctx)
-                })?;
-
-                // Extract orders and timers
-                let mut new_orders = Vec::new();
-                let mut new_timers = Vec::new();
-                let mut canceled_ids = Vec::new();
-                Python::attach(|py| {
-                    let ctx_ref = py_ctx.borrow(py);
-                    // Read from RwLock
-                    if let Ok(orders) = ctx_ref.orders_arc.read() {
-                        new_orders.extend(orders.clone());
-                    }
-                    if let Ok(timers) = ctx_ref.timers_arc.read() {
-                        new_timers.extend(timers.clone());
-                    }
-                    if let Ok(canceled) = ctx_ref.canceled_order_ids_arc.read() {
-                        canceled_ids.extend(canceled.clone());
-                    }
-                });
-                Ok((new_orders, new_timers, canceled_ids))
-            }
-            Event::Tick(t) => {
-                self.last_prices.insert(t.symbol.clone(), t.price);
-                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
-                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
-                let ctx = self.create_context(active_orders, step_trades);
-                let py_ctx = Python::attach(|py| {
-                    let py_ctx = Py::new(py, ctx).unwrap();
-                    let args = (t.clone(), py_ctx.clone_ref(py));
-                    strategy.call_method1("_on_tick_event", args)?;
-                    Ok::<_, PyErr>(py_ctx)
-                })?;
-
-                // Extract orders and timers
-                let mut new_orders = Vec::new();
-                let mut new_timers = Vec::new();
-                let mut canceled_ids = Vec::new();
-                Python::attach(|py| {
-                    let ctx_ref = py_ctx.borrow(py);
-                    if let Ok(orders) = ctx_ref.orders_arc.read() {
-                        new_orders.extend(orders.clone());
-                    }
-                    if let Ok(timers) = ctx_ref.timers_arc.read() {
-                        new_timers.extend(timers.clone());
-                    }
-                    if let Ok(canceled) = ctx_ref.canceled_order_ids_arc.read() {
-                        canceled_ids.extend(canceled.clone());
-                    }
-                });
-                Ok((new_orders, new_timers, canceled_ids))
-            }
-            Event::Timer(timer) => {
-                let step_trades = std::mem::take(&mut self.state.order_manager.current_step_trades);
-                let active_orders = Arc::new(self.state.order_manager.active_orders.clone());
-                let ctx = self.create_context(active_orders, step_trades);
-                let py_ctx = Python::attach(|py| {
-                    let py_ctx = Py::new(py, ctx).unwrap();
-                    strategy.call_method1("_on_timer_event", (timer.payload.as_str(), py_ctx.clone_ref(py)))?;
-                    Ok::<_, PyErr>(py_ctx)
-                })?;
-
-                // Extract orders and timers
-                let mut new_orders = Vec::new();
-                let mut new_timers = Vec::new();
-                let mut canceled_ids = Vec::new();
-                Python::attach(|py| {
-                    let ctx_ref = py_ctx.borrow(py);
-                    if let Ok(orders) = ctx_ref.orders_arc.read() {
-                        new_orders.extend(orders.clone());
-                    }
-                    if let Ok(timers) = ctx_ref.timers_arc.read() {
-                        new_timers.extend(timers.clone());
-                    }
-                    if let Ok(canceled) = ctx_ref.canceled_order_ids_arc.read() {
-                        canceled_ids.extend(canceled.clone());
-                    }
-                });
-                Ok((new_orders, new_timers, canceled_ids))
-            }
-            Event::OrderRequest(_) | Event::OrderValidated(_) | Event::ExecutionReport(_, _) => {
-                Ok((Vec::new(), Vec::new(), Vec::new()))
-            }
-        }
-    }
-
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::types::AssetType;
-
-    #[test]
-    fn test_engine_new() {
-        let engine = Engine::new();
-        assert_eq!(engine.state.portfolio.cash, Decimal::from(100_000));
-        assert!(engine.state.order_manager.orders.is_empty());
-        assert!(engine.state.order_manager.trades.is_empty());
-        assert_eq!(engine.execution_mode, ExecutionMode::NextOpen);
-    }
-
-    #[test]
-    fn test_engine_set_cash() {
-        let mut engine = Engine::new();
-        engine.set_cash(50000.0);
-        assert_eq!(engine.state.portfolio.cash, Decimal::from(50000));
-    }
-
-    #[test]
-    fn test_engine_add_instrument() {
-        use crate::model::instrument::{InstrumentEnum, StockInstrument};
-
-        let mut engine = Engine::new();
-        let instr = Instrument {
-            asset_type: AssetType::Stock,
-            inner: InstrumentEnum::Stock(StockInstrument {
-                symbol: "AAPL".to_string(),
-                lot_size: Decimal::from(100),
-                tick_size: Decimal::new(1, 2),
-            }),
-        };
-        engine.add_instrument(instr);
-        assert!(engine.instruments.contains_key("AAPL"));
-    }
-
-    #[test]
-    fn test_engine_fee_rules() {
-        let mut engine = Engine::new();
-        engine.set_stock_fee_rules(0.001, 0.002, 0.003, 5.0);
-
-        // Since market_config is private but used in market_model, we can't check it directly easily
-        // unless we expose getters or check behavior.
-        // But we can check if it compiles and runs without error.
-        // Actually, we can check market_config if we make it pub or add a getter for test.
-        // But for now, let's trust the setter sets the internal state.
-        // We can verify via commission calculation if we had a way to invoke it without full run.
-
-        // Let's at least verify future fee rules
-        engine.set_future_fee_rules(0.0005);
-    }
-
-    #[test]
-    fn test_engine_timezone() {
-        let mut engine = Engine::new();
-        engine.set_timezone(3600); // UTC+1
-        assert_eq!(engine.timezone_offset, 3600);
     }
 }

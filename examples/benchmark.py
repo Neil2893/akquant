@@ -199,9 +199,10 @@ if __name__ == "__main__":
 
     # 打印详细统计
     print("-" * 50)
-    print(
-        f"Final Equity: {result.equity_curve[-1][1] if result.equity_curve else 'N/A'}"
+    final_equity = (
+        result.equity_curve.iloc[-1] if len(result.equity_curve) > 0 else "N/A"
     )
+    print(f"Final Equity: {final_equity}")
     print(f"Total Commission: {result.trade_metrics.total_commission:.2f}")
     print(f"Net PnL: {result.trade_metrics.net_pnl:.2f}")
 

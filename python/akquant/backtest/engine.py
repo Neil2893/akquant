@@ -1,0 +1,768 @@
+import datetime as dt_module
+import os
+import sys
+from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
+
+import pandas as pd
+
+from ..akquant import (
+    AssetType,
+    Bar,
+    DataFeed,
+    Engine,
+    ExecutionMode,
+    Instrument,
+)
+from ..config import BacktestConfig, InstrumentConfig
+from ..data import ParquetDataCatalog
+from ..log import get_logger, register_logger
+from ..risk import apply_risk_config
+from ..strategy import Strategy
+from ..utils import df_to_arrays, prepare_dataframe
+from ..utils.inspector import infer_warmup_period
+from .result import BacktestResult
+
+
+class FunctionalStrategy(Strategy):
+    """内部策略包装器，用于支持函数式 API (Zipline 风格)."""
+
+    def __init__(
+        self,
+        initialize: Optional[Callable[[Any], None]],
+        on_bar: Optional[Callable[[Any, Bar], None]],
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        """Initialize the FunctionalStrategy."""
+        super().__init__()
+        self._initialize = initialize
+        self._on_bar_func = on_bar
+        self._context = context or {}
+
+        # 将 context 注入到 self 中，模拟 Zipline 的 context 对象
+        # 用户可以通过 self.xxx 访问 context 属性
+        for k, v in self._context.items():
+            setattr(self, k, v)
+
+        # 调用初始化函数
+        if self._initialize is not None:
+            self._initialize(self)
+
+    def on_bar(self, bar: Bar) -> None:
+        """Delegate on_bar event to the user-provided function."""
+        if self._on_bar_func is not None:
+            self._on_bar_func(self, bar)
+
+
+def run_backtest(
+    data: Optional[Union[pd.DataFrame, Dict[str, pd.DataFrame], List[Bar]]] = None,
+    strategy: Union[Type[Strategy], Strategy, Callable[[Any, Bar], None], None] = None,
+    symbol: Union[str, List[str]] = "BENCHMARK",
+    initial_cash: Optional[float] = None,
+    commission_rate: Optional[float] = None,
+    stamp_tax_rate: float = 0.0,
+    transfer_fee_rate: float = 0.0,
+    min_commission: float = 0.0,
+    execution_mode: Union[ExecutionMode, str] = ExecutionMode.NextOpen,
+    timezone: Optional[str] = None,
+    t_plus_one: bool = False,
+    initialize: Optional[Callable[[Any], None]] = None,
+    context: Optional[Dict[str, Any]] = None,
+    history_depth: Optional[int] = None,
+    warmup_period: int = 0,
+    lot_size: Union[int, Dict[str, int], None] = None,
+    show_progress: Optional[bool] = None,
+    start_time: Optional[Union[str, Any]] = None,
+    end_time: Optional[Union[str, Any]] = None,
+    config: Optional[BacktestConfig] = None,
+    instruments_config: Optional[
+        Union[List[InstrumentConfig], Dict[str, InstrumentConfig]]
+    ] = None,
+    custom_matchers: Optional[Dict[AssetType, Any]] = None,
+    **kwargs: Any,
+) -> BacktestResult:
+    """
+    简化版回测入口函数.
+
+    :param data: 回测数据，可以是 Pandas DataFrame 或 Bar 列表.
+    :param custom_matchers: 自定义撮合器字典 {AssetType: MatcherInstance}
+                 可选(如果配置了config或策略订阅).
+    :param strategy: 策略类、策略实例或 on_bar 回调函数
+    :param symbol: 标的代码
+    :param initial_cash: 初始资金 (默认 1,000,000.0)
+    :param commission_rate: 佣金率 (默认 0.0)
+    :param stamp_tax_rate: 印花税率 (仅卖出, 默认 0.0)
+    :param transfer_fee_rate: 过户费率 (默认 0.0)
+    :param min_commission: 最低佣金 (默认 0.0)
+    :param execution_mode: 执行模式 (ExecutionMode.NextOpen 或 "next_open")
+    :param timezone: 时区名称 (默认 "Asia/Shanghai")
+    :param t_plus_one: 是否启用 T+1 交易规则 (默认 False)
+    :param initialize: 初始化回调函数 (仅当 strategy 为函数时使用)
+    :param context: 初始上下文数据 (仅当 strategy 为函数时使用)
+    :param history_depth: 自动维护历史数据的长度 (0 表示禁用)
+    :param warmup_period: 策略预热期 (等同于 history_depth，取最大值)
+    :param lot_size: 最小交易单位。如果是 int，则应用于所有标的；
+                     如果是 Dict[str, int]，则按代码匹配；如果不传(None)，默认为 1。
+    :param show_progress: 是否显示进度条 (默认 True)
+    :param start_time: 回测开始时间 (e.g., "2020-01-01 09:30"). 优先级高于
+                       config.start_time.
+    :param end_time: 回测结束时间 (e.g., "2020-12-31 15:00"). 优先级高于
+                     config.end_time.
+    :param config: BacktestConfig 配置对象 (可选)
+    :param instruments_config: 标的配置列表或字典 (可选)
+    :return: 回测结果 Result 对象
+
+    配置优先级说明 (Parameter Priority):
+    ----------------------------------
+    本函数参数采用以下优先级顺序解析（由高到低）：
+
+    1. **Explicit Arguments (显式参数)**:
+       直接传递给 `run_backtest` 的参数优先级最高。
+       例如: `run_backtest(..., start_time="2022-01-01")` 会覆盖 Config 中的设置。
+
+    2. **Configuration Objects (配置对象)**:
+       如果显式参数为 `None`，则尝试从 `config` (`BacktestConfig`) 及其子配置
+       (`StrategyConfig`) 中读取。
+       例如: `config.start_time` 或 `config.strategy_config.initial_cash`。
+
+    3. **Default Values (默认值)**:
+       如果上述两者都未提供，则使用系统默认值。
+       例如: `initial_cash` 默认为 1,000,000。
+    """
+    # 0. 设置默认值 (如果未传入且未在 Config 中设置)
+    # 优先级: 参数 > Config > 默认值
+
+    # Defaults
+    DEFAULT_INITIAL_CASH = 1_000_000.0
+    DEFAULT_COMMISSION_RATE = 0.0
+    DEFAULT_TIMEZONE = "Asia/Shanghai"
+    DEFAULT_SHOW_PROGRESS = True
+    DEFAULT_HISTORY_DEPTH = 0
+
+    # Resolve Initial Cash
+    if initial_cash is None:
+        if config and config.strategy_config:
+            initial_cash = config.strategy_config.initial_cash
+        else:
+            initial_cash = DEFAULT_INITIAL_CASH
+
+    # Resolve Commission Rate
+    if commission_rate is None:
+        if config and config.strategy_config:
+            commission_rate = config.strategy_config.commission_rate
+        else:
+            commission_rate = DEFAULT_COMMISSION_RATE
+
+    # Resolve Other Fees (if not passed as args, check config)
+    if config and config.strategy_config:
+        if stamp_tax_rate == 0.0:
+            stamp_tax_rate = config.strategy_config.stamp_tax_rate
+        if transfer_fee_rate == 0.0:
+            transfer_fee_rate = config.strategy_config.transfer_fee_rate
+        if min_commission == 0.0:
+            min_commission = config.strategy_config.min_commission
+
+    # Resolve Timezone
+    if timezone is None:
+        if config and config.timezone:
+            timezone = config.timezone
+        else:
+            timezone = DEFAULT_TIMEZONE
+
+    # Resolve Show Progress
+    if show_progress is None:
+        if config and config.show_progress is not None:
+            show_progress = config.show_progress
+        else:
+            show_progress = DEFAULT_SHOW_PROGRESS
+
+    # Resolve History Depth
+    if history_depth is None:
+        if config and config.history_depth is not None:
+            history_depth = config.history_depth
+        else:
+            history_depth = DEFAULT_HISTORY_DEPTH
+
+    # 1. 确保日志已初始化
+    logger = get_logger()
+    if not logger.handlers:
+        register_logger(console=True, level="INFO")
+        logger = get_logger()
+
+    # 1.2 检查 PyCharm 环境下的进度条可见性
+    if show_progress and "PYCHARM_HOSTED" in os.environ:
+        # PyCharm Console 或 Run 窗口未开启模拟终端时，isatty 通常为 False
+        if not sys.stderr.isatty():
+            logger.warning(
+                "Progress bar might be invisible in PyCharm. "
+                "Solution: Enable 'Emulate terminal in output console' "
+                "in Run Configuration."
+            )
+
+    # 1.5 处理 Config 覆盖 (剩余部分)
+    # Resolve effective start/end time for filtering
+    # Priority: explicit argument > config
+
+    if start_time is None:
+        if config and config.start_time:
+            start_time = config.start_time
+
+    if end_time is None:
+        if config and config.end_time:
+            end_time = config.end_time
+
+    # Update kwargs if needed by strategy (optional, can be removed if strategies
+    # don't need it)
+    if start_time:
+        kwargs["start_time"] = start_time
+    if end_time:
+        kwargs["end_time"] = end_time
+
+        # 注意: initial_cash, commission_rate, timezone, show_progress, history_depth
+        # 已经在上方通过优先级逻辑处理过了，这里不需要再覆盖
+
+        # Risk Config injection handled later
+
+    # Handle strategy_params explicitly
+    if "strategy_params" in kwargs:
+        s_params = kwargs.pop("strategy_params")
+        if isinstance(s_params, dict):
+            kwargs.update(s_params)
+
+    # 2. 实例化策略 (提前实例化以获取订阅信息)
+    strategy_instance = None
+
+    if isinstance(strategy, type) and issubclass(strategy, Strategy):
+        try:
+            strategy_instance = strategy(**kwargs)
+        except TypeError as e:
+            # Try fallback only if explicit kwargs failed, but log warning
+            # However, if kwargs contained extra unused params, this failure is
+            # expected for strict init.
+            # But we should try to match params if possible, or just let it fail
+            # if user provided params that don't match?
+            # The original behavior was silent fallback. We should preserve it
+            # but try to be smarter?
+            # Or at least warn if strategy_params were provided but ignored.
+
+            # For now, keep the fallback but maybe inspect if it was due to
+            # strategy_params
+            logger.warning(
+                f"Failed to instantiate strategy with provided parameters: {e}. "
+                "Falling back to default constructor (no arguments)."
+            )
+            strategy_instance = strategy()
+    elif isinstance(strategy, Strategy):
+        strategy_instance = strategy
+    elif callable(strategy):
+        strategy_instance = FunctionalStrategy(
+            initialize, cast(Callable[[Any, Bar], None], strategy), context
+        )
+    elif strategy is None:
+        raise ValueError("Strategy must be provided.")
+    else:
+        raise ValueError("Invalid strategy type")
+
+    # 注入 context
+    if context and hasattr(strategy_instance, "_context"):
+        pass
+    elif context and strategy_instance:
+        for k, v in context.items():
+            setattr(strategy_instance, k, v)
+
+    # 注入 Config 中的 Risk Config
+    if config and config.strategy_config and config.strategy_config.risk:
+        # 如果策略支持 set_risk_config (假设我们添加它，或者直接注入属性)
+        if hasattr(strategy_instance, "risk_config"):
+            strategy_instance.risk_config = config.strategy_config.risk  # type: ignore
+
+    # 注入费率配置到 Strategy 实例
+    if hasattr(strategy_instance, "commission_rate"):
+        strategy_instance.commission_rate = commission_rate
+    if hasattr(strategy_instance, "min_commission"):
+        strategy_instance.min_commission = min_commission
+    if hasattr(strategy_instance, "stamp_tax_rate"):
+        strategy_instance.stamp_tax_rate = stamp_tax_rate
+    if hasattr(strategy_instance, "transfer_fee_rate"):
+        strategy_instance.transfer_fee_rate = transfer_fee_rate
+
+    # 注入 lot_size
+    # lot_size 参数可能是 int 或 dict。
+    # 如果是 dict，则 Strategy._calculate_max_buy_qty 会自动处理
+    if lot_size is not None and hasattr(strategy_instance, "lot_size"):
+        strategy_instance.lot_size = lot_size
+    elif lot_size is None and hasattr(strategy_instance, "lot_size"):
+        # 默认值已经在 Strategy.__new__ 中设置为 1
+        pass
+
+    # 调用 on_start 获取订阅
+    # 注意：现在调用 _on_start_internal 来触发自动发现
+    if hasattr(strategy_instance, "_on_start_internal"):
+        strategy_instance._on_start_internal()
+    elif hasattr(strategy_instance, "on_start"):
+        strategy_instance.on_start()
+
+    # 3. 准备数据源和 Symbol
+    feed = DataFeed()
+    symbols = []
+    data_map_for_indicators = {}
+
+    if isinstance(symbol, str):
+        symbols = [symbol]
+    elif isinstance(symbol, (list, tuple)):
+        symbols = list(symbol)
+    else:
+        symbols = ["BENCHMARK"]
+
+    # Merge with Config instruments
+    if config and config.instruments:
+        for s in config.instruments:
+            if s not in symbols:
+                symbols.append(s)
+
+    # Merge with Strategy subscriptions
+    if hasattr(strategy_instance, "_subscriptions"):
+        for s in strategy_instance._subscriptions:
+            if s not in symbols:
+                symbols.append(s)
+
+    # Determine Data Loading Strategy
+    if data is not None:
+        # Use provided data
+        if isinstance(data, pd.DataFrame):
+            # Ensure index is datetime
+            if not isinstance(data.index, pd.DatetimeIndex):
+                # Try to find a date column if index is not date
+                # Common candidates: "date", "timestamp", "datetime"
+                found_date = False
+                for col in ["date", "timestamp", "datetime", "Date", "Timestamp"]:
+                    if col in data.columns:
+                        data = data.set_index(col)
+                        found_date = True
+                        break
+
+                if not found_date:
+                    # try convert index
+                    try:
+                        data.index = pd.to_datetime(data.index)
+                    except Exception:
+                        pass
+
+            # Ensure index is pd.Timestamp compatible
+            # (convert datetime.date to Timestamp)
+            # This is handled by pd.to_datetime but let's be safe for object index
+            if data.index.dtype == "object":
+                try:
+                    data.index = pd.to_datetime(data.index)
+                except Exception:
+                    pass
+
+            # Filter by date if provided
+            if start_time:
+                # Handle potential mismatch between Timestamp and datetime.date
+                ts_start = pd.Timestamp(start_time)
+                # If index is date objects, compare with date()
+                if (
+                    len(data) > 0
+                    and isinstance(data.index[0], (dt_module.date))
+                    and not isinstance(data.index[0], dt_module.datetime)
+                ):
+                    data = data[data.index >= ts_start.date()]
+                else:
+                    data = data[data.index >= ts_start]
+
+            if end_time:
+                ts_end = pd.Timestamp(end_time)
+                if (
+                    len(data) > 0
+                    and isinstance(data.index[0], (dt_module.date))
+                    and not isinstance(data.index[0], dt_module.datetime)
+                ):
+                    data = data[data.index <= ts_end.date()]
+                else:
+                    data = data[data.index <= ts_end]
+
+            # Try to infer symbol from DataFrame if not explicitly provided or default
+            if (not symbols or symbols == ["BENCHMARK"]) and "symbol" in data.columns:
+                unique_symbols = data["symbol"].unique()
+                if len(unique_symbols) == 1:
+                    inferred = unique_symbols[0]
+                    if symbols == ["BENCHMARK"]:
+                        symbols = [inferred]
+                    else:
+                        if inferred not in symbols:
+                            symbols.append(inferred)
+
+            target_symbol = symbols[0] if symbols else "BENCHMARK"
+            df = prepare_dataframe(data)
+            data_map_for_indicators[target_symbol] = df
+            arrays = df_to_arrays(df, symbol=target_symbol)
+            feed.add_arrays(*arrays)  # type: ignore
+            feed.sort()
+            if target_symbol not in symbols:
+                symbols = [target_symbol]
+        elif isinstance(data, dict):
+            # If explicit symbols are provided (i.e., not just the default "BENCHMARK"),
+            # we filter the data dictionary to only include requested symbols.
+            filter_symbols = "BENCHMARK" not in symbols
+
+            for sym, df in data.items():
+                if filter_symbols and sym not in symbols:
+                    continue
+
+                # Ensure index is datetime
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    # Try to find a date column if index is not date
+                    found_date = False
+                    for col in ["date", "timestamp", "datetime", "Date", "Timestamp"]:
+                        if col in df.columns:
+                            df = df.set_index(col)
+                            df.index = pd.to_datetime(df.index)
+                            found_date = True
+                            break
+
+                    if not found_date:
+                        try:
+                            df.index = pd.to_datetime(df.index)
+                        except Exception:
+                            pass
+
+                # Filter by date
+                if start_time:
+                    df = df[df.index >= pd.Timestamp(start_time)]
+                if end_time:
+                    df = df[df.index <= pd.Timestamp(end_time)]
+
+                df_prep = prepare_dataframe(df)
+                data_map_for_indicators[sym] = df_prep
+                arrays = df_to_arrays(df_prep, symbol=sym)
+                feed.add_arrays(*arrays)  # type: ignore
+                if sym not in symbols:
+                    symbols.append(sym)
+            feed.sort()
+        elif isinstance(data, list):
+            if data:
+                # Filter by date
+                if start_time:
+                    # Explicitly convert to int to satisfy mypy
+                    ts_start: int = int(pd.Timestamp(start_time).value)  # type: ignore
+                    data = [b for b in data if b.timestamp >= ts_start]  # type: ignore
+                if end_time:
+                    ts_end: int = int(pd.Timestamp(end_time).value)  # type: ignore
+                    data = [b for b in data if b.timestamp <= ts_end]  # type: ignore
+
+                data.sort(key=lambda b: b.timestamp)
+                feed.add_bars(data)
+    else:
+        # Load from Catalog / Akshare
+        if not symbols:
+            logger.warning("No symbols specified and no data provided.")
+
+        catalog = ParquetDataCatalog()
+        # start_time / end_time already resolved above
+
+        loaded_count = 0
+        for sym in symbols:
+            # Try Catalog
+            df = catalog.read(sym, start_time=start_time, end_time=end_time)
+            if df.empty:
+                logger.warning(f"Data not found in catalog for {sym}")
+                continue
+
+            if not df.empty:
+                df = prepare_dataframe(df)
+                data_map_for_indicators[sym] = df
+                arrays = df_to_arrays(df, symbol=sym)
+                feed.add_arrays(*arrays)  # type: ignore
+                loaded_count += 1
+
+        if loaded_count > 0:
+            feed.sort()
+        else:
+            if symbols:
+                logger.warning("Failed to load data for all requested symbols.")
+
+    # Inject timezone to strategy
+    strategy_instance.timezone = timezone
+
+    # Inject trading days to strategy (for add_daily_timer)
+    if hasattr(strategy_instance, "_trading_days") and data_map_for_indicators:
+        all_dates: set[pd.Timestamp] = set()
+        for df in data_map_for_indicators.values():
+            if not df.empty and isinstance(df.index, pd.DatetimeIndex):
+                dates = df.index.normalize().unique()
+                all_dates.update(dates)
+
+        if all_dates:
+            strategy_instance._trading_days = sorted(list(all_dates))
+
+    # 3.5 Pre-calculate indicators
+    # Inject data into indicators so they can be accessed in on_bar via get_value()
+    if hasattr(strategy_instance, "_indicators") and data_map_for_indicators:
+        for symbol_key, df_val in data_map_for_indicators.items():
+            for ind in strategy_instance._indicators:
+                try:
+                    ind(df_val, symbol_key)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to calculate indicator {ind.name} "
+                        f"for {symbol_key}: {e}"
+                    )
+
+    # 4. 配置引擎
+    engine = Engine()
+    # engine.set_timezone_name(timezone)
+    offset_delta = pd.Timestamp.now(tz=timezone).utcoffset()
+    if offset_delta is None:
+        raise ValueError(f"Invalid timezone: {timezone}")
+    offset = int(offset_delta.total_seconds())
+    engine.set_timezone(offset)
+    engine.set_cash(initial_cash)
+    if history_depth > 0:
+        engine.set_history_depth(history_depth)
+
+    # Register Custom Matchers
+    if custom_matchers:
+        for asset_type, matcher in custom_matchers.items():
+            try:
+                cast(Any, engine).register_custom_matcher(asset_type, matcher)
+            except Exception as e:
+                logger.warning(
+                    "Failed to register custom matcher for %s: %s",
+                    asset_type,
+                    e,
+                )
+
+    # ... (ExecutionMode logic)
+    if isinstance(execution_mode, str):
+        mode_map = {
+            "next_open": ExecutionMode.NextOpen,
+            "current_close": ExecutionMode.CurrentClose,
+        }
+        mode = mode_map.get(execution_mode.lower())
+        if not mode:
+            logger.warning(
+                f"Unknown execution mode '{execution_mode}', defaulting to NextOpen"
+            )
+            mode = ExecutionMode.NextOpen
+        engine.set_execution_mode(mode)
+    else:
+        engine.set_execution_mode(execution_mode)
+
+    # 4.1 市场规则配置
+    # 如果启用了 T+1，必须使用 ChinaMarket
+    if t_plus_one:
+        # T+1 必须使用 ChinaMarket
+        engine.use_china_market()
+        engine.set_t_plus_one(True)
+    else:
+        # T+0 模式
+        # 使用SimpleMarket（支持佣金率和印花税）
+        engine.use_simple_market(commission_rate)
+
+    engine.set_force_session_continuous(True)
+    # 无论使用 SimpleMarket 还是 ChinaMarket，set_stock_fee_rules 都能正确配置费率
+    engine.set_stock_fee_rules(
+        commission_rate, stamp_tax_rate, transfer_fee_rate, min_commission
+    )
+
+    # Configure other asset fees if provided
+    if "fund_commission" in kwargs:
+        engine.set_fund_fee_rules(
+            kwargs["fund_commission"],
+            kwargs.get("fund_transfer_fee", 0.0),
+            kwargs.get("fund_min_commission", 0.0),
+        )
+
+    if "option_commission" in kwargs:
+        engine.set_option_fee_rules(kwargs["option_commission"])
+
+    # Apply Risk Config
+    if config and config.strategy_config:
+        apply_risk_config(engine, config.strategy_config.risk)
+
+    # 5. 添加标的
+    # 解析 Instrument Config
+    inst_conf_map = {}
+
+    # Handle explicit Instrument objects passed via kwargs
+    prebuilt_instruments = {}
+    if "instruments" in kwargs:
+        obs = kwargs["instruments"]
+        if isinstance(obs, list):
+            for o in obs:
+                prebuilt_instruments[o.symbol] = o
+        elif isinstance(obs, dict):
+            prebuilt_instruments.update(obs)
+
+    # From arguments
+    if instruments_config:
+        if isinstance(instruments_config, list):
+            for c in instruments_config:
+                inst_conf_map[c.symbol] = c
+        elif isinstance(instruments_config, dict):
+            inst_conf_map.update(instruments_config)
+
+    # From BacktestConfig
+    if config and config.instruments_config:
+        if isinstance(config.instruments_config, list):
+            for c in config.instruments_config:
+                if c.symbol not in inst_conf_map:
+                    inst_conf_map[c.symbol] = c
+        elif isinstance(config.instruments_config, dict):
+            for k, v in config.instruments_config.items():
+                if k not in inst_conf_map:
+                    inst_conf_map[k] = v
+
+    # Default values from kwargs
+    default_multiplier = kwargs.get("multiplier", 1.0)
+    default_margin_ratio = kwargs.get("margin_ratio", 1.0)
+    default_tick_size = kwargs.get("tick_size", 0.01)
+    default_asset_type = kwargs.get("asset_type", AssetType.Stock)
+
+    # Option specific fields
+    default_option_type = kwargs.get("option_type", None)
+    default_strike_price = kwargs.get("strike_price", None)
+    default_expiry_date = kwargs.get("expiry_date", None)
+
+    def _parse_asset_type(val: Union[str, AssetType]) -> AssetType:
+        if isinstance(val, AssetType):
+            return val
+        if isinstance(val, str):
+            v_lower = val.lower()
+            if "stock" in v_lower:
+                return AssetType.Stock
+            if "future" in v_lower:
+                return AssetType.Futures
+            if "fund" in v_lower:
+                return AssetType.Fund
+            if "option" in v_lower:
+                return AssetType.Option
+        return AssetType.Stock
+
+    def _parse_option_type(val: Any) -> Any:
+        # OptionType might not be available in current binary
+        try:
+            from ..akquant import OptionType  # type: ignore
+
+            if isinstance(val, str):
+                if val.lower() == "call":
+                    return OptionType.Call
+                if val.lower() == "put":
+                    return OptionType.Put
+        except ImportError:
+            pass
+        return val
+
+    def _parse_expiry(val: Any) -> Optional[int]:
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return int(val)
+        if isinstance(val, str):
+            try:
+                # Convert string date to nanosecond timestamp
+                return int(pd.Timestamp(val).value)
+            except Exception:
+                pass
+        return None
+
+    for sym in symbols:
+        # Priority: Pre-built Instrument > Config > Default
+        if sym in prebuilt_instruments:
+            engine.add_instrument(prebuilt_instruments[sym])
+            continue
+
+        # Determine lot_size for this symbol
+        current_lot_size = None
+        if isinstance(lot_size, int):
+            current_lot_size = lot_size
+        elif isinstance(lot_size, dict):
+            current_lot_size = lot_size.get(sym)
+
+        # Check specific config
+        i_conf = inst_conf_map.get(sym)
+
+        if i_conf:
+            p_asset_type = _parse_asset_type(i_conf.asset_type)
+            p_multiplier = i_conf.multiplier
+            p_margin = i_conf.margin_ratio
+            p_tick = i_conf.tick_size
+            # If config has lot_size, use it, otherwise use global setting
+            p_lot = i_conf.lot_size if i_conf.lot_size != 1 else (current_lot_size or 1)
+
+            p_opt_type = _parse_option_type(i_conf.option_type)
+            p_strike = i_conf.strike_price
+            p_expiry = _parse_expiry(i_conf.expiry_date)
+        else:
+            p_asset_type = default_asset_type
+            p_multiplier = default_multiplier
+            p_margin = default_margin_ratio
+            p_tick = default_tick_size
+            p_lot = current_lot_size or 1
+
+            p_opt_type = default_option_type
+            p_strike = default_strike_price
+            p_expiry = _parse_expiry(default_expiry_date)
+
+        instr = Instrument(
+            sym,
+            p_asset_type,
+            p_multiplier,
+            p_margin,
+            p_tick,
+            p_opt_type,
+            p_strike,
+            p_expiry,
+            p_lot,
+        )
+        engine.add_instrument(instr)
+
+    # 6. 添加数据
+    engine.add_data(feed)
+
+    # 7. 运行回测
+    logger.info("Running backtest via run_backtest()...")
+
+    # 设置自动历史数据维护
+    # Logic: effective_depth = max(strategy.warmup_period, inferred_warmup,
+    #                              run_backtest(history_depth))
+    strategy_warmup = getattr(strategy_instance, "warmup_period", 0)
+
+    # Auto-infer from AST
+    inferred_warmup = 0
+    try:
+        inferred_warmup = infer_warmup_period(type(strategy_instance))
+        if inferred_warmup > 0:
+            logger.info(f"Auto-inferred warmup period: {inferred_warmup}")
+    except Exception as e:
+        logger.debug(f"Failed to infer warmup period: {e}")
+
+    # Determine final warmup period
+    final_warmup = max(strategy_warmup, inferred_warmup, warmup_period)
+    # Update strategy instance with the determined warmup period
+    strategy_instance.warmup_period = final_warmup
+
+    effective_depth = max(final_warmup, history_depth)
+
+    if effective_depth > 0:
+        strategy_instance.set_history_depth(effective_depth)
+
+    # 7.5 Prepare Indicators (Vectorized Pre-calculation)
+    if hasattr(strategy_instance, "_prepare_indicators") and data_map_for_indicators:
+        strategy_instance._prepare_indicators(data_map_for_indicators)
+
+    try:
+        engine.run(strategy_instance, show_progress)
+    except Exception as e:
+        logger.error(f"Backtest failed: {e}")
+        raise e
+    finally:
+        if hasattr(strategy_instance, "on_stop"):
+            try:
+                strategy_instance.on_stop()
+            except Exception as e:
+                logger.error(f"Error in on_stop: {e}")
+
+    return BacktestResult(
+        engine.get_results(), timezone=timezone, initial_cash=initial_cash
+    )
