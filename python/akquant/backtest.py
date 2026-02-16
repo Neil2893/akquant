@@ -254,43 +254,62 @@ class BacktestResult:
             - unrealized_pnl (float): Floating PnL.
             - entry_price (float): Average entry price.
         """
-        # Try to use the Rust optimized getter if available
-        if hasattr(self._raw, "get_positions_dict"):
-            data = self._raw.get_positions_dict()
-            if not data or not data["symbol"]:
-                return pd.DataFrame()
+        df = pd.DataFrame()
 
-            df = pd.DataFrame(data)
+        # 1. Try IPC
+        if hasattr(self._raw, "get_positions_ipc"):
+            try:
+                import io
 
-            # Convert date to datetime
+                import pyarrow as pa
+
+                ipc_bytes = self._raw.get_positions_ipc()
+                if ipc_bytes and len(ipc_bytes) > 0:
+                    reader = pa.ipc.open_stream(io.BytesIO(ipc_bytes))
+                    df = reader.read_pandas()
+            except (ImportError, Exception):
+                pass
+
+        # 2. Try Dict
+        if df.empty and hasattr(self._raw, "get_positions_dict"):
+            try:
+                data = self._raw.get_positions_dict()
+                if data and data.get("symbol"):  # Check if data exists
+                    df = pd.DataFrame(data)
+            except Exception:
+                pass
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Convert date to datetime
+        if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"], unit="ns", utc=True).dt.tz_convert(
                 self._timezone
             )
 
-            # Reorder columns
-            cols = [
-                "long_shares",
-                "short_shares",
-                "close",
-                "equity",
-                "market_value",
-                "margin",
-                "unrealized_pnl",
-                "entry_price",
-                "symbol",
-                "date",
-            ]
-            # Ensure all columns exist
-            # (in case of empty or mismatch, though Rust guarantees keys)
-            existing_cols = [c for c in cols if c in df.columns]
-            df = df[existing_cols]
+        # Reorder columns
+        cols = [
+            "long_shares",
+            "short_shares",
+            "close",
+            "equity",
+            "market_value",
+            "margin",
+            "unrealized_pnl",
+            "entry_price",
+            "symbol",
+            "date",
+        ]
+        # Ensure all columns exist
+        existing_cols = [c for c in cols if c in df.columns]
+        df = df[existing_cols]
 
-            # Sort
+        # Sort
+        if "symbol" in df.columns and "date" in df.columns:
             df = df.sort_values(by=["symbol", "date"])
 
-            return cast(pd.DataFrame, df)
-
-        return pd.DataFrame()
+        return cast(pd.DataFrame, df)
 
     @property
     def metrics_df(self) -> pd.DataFrame:
@@ -484,12 +503,34 @@ class BacktestResult:
         if not self._raw.trades:
             return pd.DataFrame()
 
-        # Try to use the optimized get_trades_dict method (from Rust)
-        # Fallback to loop if not available (old binary)
-        if hasattr(self._raw, "get_trades_dict"):
-            data_dict = self._raw.get_trades_dict()
-            df = pd.DataFrame(data_dict)
-        else:
+        df = pd.DataFrame()
+
+        # 1. Try IPC (Zero-Copy-ish via Arrow)
+        if hasattr(self._raw, "get_trades_ipc"):
+            try:
+                import io
+
+                import pyarrow as pa
+
+                ipc_bytes = self._raw.get_trades_ipc()
+                if ipc_bytes and len(ipc_bytes) > 0:
+                    reader = pa.ipc.open_stream(io.BytesIO(ipc_bytes))
+                    df = reader.read_pandas()
+            except (ImportError, Exception):
+                # Fallback to other methods if pyarrow missing or IPC fails
+                pass
+
+        # 2. Try Dict (Fast)
+        if df.empty and hasattr(self._raw, "get_trades_dict"):
+            try:
+                data_dict = self._raw.get_trades_dict()
+                if data_dict:
+                    df = pd.DataFrame(data_dict)
+            except Exception:
+                pass
+
+        # 3. Fallback to List of Objects (Slow)
+        if df.empty:
             data_list = []
             for t in self._raw.trades:
                 data_list.append(
@@ -519,13 +560,21 @@ class BacktestResult:
                 )
             df = pd.DataFrame(data_list)
 
+        if df.empty:
+            return df
+
         # Convert timestamps
-        df["entry_time"] = pd.to_datetime(
-            df["entry_time"], unit="ns", utc=True
-        ).dt.tz_convert(self._timezone)
-        df["exit_time"] = pd.to_datetime(
-            df["exit_time"], unit="ns", utc=True
-        ).dt.tz_convert(self._timezone)
+        # Check columns exist. IPC schema may vary across versions;
+        # here we control the schema.
+        if "entry_time" in df.columns:
+            df["entry_time"] = pd.to_datetime(
+                df["entry_time"], unit="ns", utc=True
+            ).dt.tz_convert(self._timezone)
+
+        if "exit_time" in df.columns:
+            df["exit_time"] = pd.to_datetime(
+                df["exit_time"], unit="ns", utc=True
+            ).dt.tz_convert(self._timezone)
 
         # Convert duration to Timedelta
         if "duration" in df.columns:
@@ -717,12 +766,14 @@ def run_backtest(
     instruments_config: Optional[
         Union[List[InstrumentConfig], Dict[str, InstrumentConfig]]
     ] = None,
+    custom_matchers: Optional[Dict[AssetType, Any]] = None,
     **kwargs: Any,
 ) -> BacktestResult:
     """
     简化版回测入口函数.
 
     :param data: 回测数据，可以是 Pandas DataFrame 或 Bar 列表.
+    :param custom_matchers: 自定义撮合器字典 {AssetType: MatcherInstance}
                  可选(如果配置了config或策略订阅).
     :param strategy: 策略类、策略实例或 on_bar 回调函数
     :param symbol: 标的代码
@@ -1157,6 +1208,18 @@ def run_backtest(
     engine.set_cash(initial_cash)
     if history_depth > 0:
         engine.set_history_depth(history_depth)
+
+    # Register Custom Matchers
+    if custom_matchers:
+        for asset_type, matcher in custom_matchers.items():
+            try:
+                cast(Any, engine).register_custom_matcher(asset_type, matcher)
+            except Exception as e:
+                logger.warning(
+                    "Failed to register custom matcher for %s: %s",
+                    asset_type,
+                    e,
+                )
 
     # ... (ExecutionMode logic)
     if isinstance(execution_mode, str):

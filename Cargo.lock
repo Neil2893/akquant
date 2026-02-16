@@ -30,12 +30,13 @@ dependencies = [
 
 [[package]]
 name = "akquant"
-version = "0.1.39"
+version = "0.1.40"
 dependencies = [
  "anyhow",
  "chrono",
  "csv",
  "indicatif",
+ "log",
  "numpy",
  "polars",
  "pyo3",

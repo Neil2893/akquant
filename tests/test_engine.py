@@ -18,8 +18,6 @@ def test_engine_initialization() -> None:
 class DummyStrategy(akquant.Strategy):
     """A dummy strategy for testing purposes."""
 
-    pass
-
 
 class RegressionStrategy(akquant.Strategy):
     """Regression strategy for baseline checks."""
@@ -47,10 +45,22 @@ class NoopStrategy(akquant.Strategy):
 
 
 def _ns(dt: datetime) -> int:
+    """
+    Convert a datetime to nanoseconds since epoch.
+
+    :param dt: Datetime object.
+    :return: Nanoseconds since epoch.
+    """
     return int(dt.timestamp() * 1e9)
 
 
 def _build_regression_bars(symbol: str) -> list[akquant.Bar]:
+    """
+    Build a deterministic 3-bar series for regression verification.
+
+    :param symbol: Symbol for bars.
+    :return: List of Bar objects.
+    """
     day1 = _ns(datetime(2023, 1, 2, 15, 0, tzinfo=timezone.utc))
     day2 = _ns(datetime(2023, 1, 3, 15, 0, tzinfo=timezone.utc))
     day3 = _ns(datetime(2023, 1, 4, 15, 0, tzinfo=timezone.utc))
@@ -62,6 +72,13 @@ def _build_regression_bars(symbol: str) -> list[akquant.Bar]:
 
 
 def _build_benchmark_data(n: int, symbol: str) -> pd.DataFrame:
+    """
+    Build a synthetic minute-level dataset for throughput tests.
+
+    :param n: Number of rows.
+    :param symbol: Symbol name.
+    :return: DataFrame with OHLCV and symbol columns.
+    """
     rng = np.random.default_rng(7)
     dates = pd.date_range("2020-01-01", periods=n, freq="min", tz="UTC")
     returns = rng.normal(0, 0.001, n)

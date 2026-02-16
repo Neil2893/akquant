@@ -143,12 +143,28 @@ impl Order {
         self.filled_quantity.to_f64().unwrap_or_default()
     }
 
+    #[setter]
+    fn set_filled_quantity(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.filled_quantity = extract_decimal(value)?;
+        Ok(())
+    }
+
     #[getter]
     /// 获取成交均价.
     /// :return: 成交均价 (如果未成交则返回 None)
     fn get_average_filled_price(&self) -> Option<f64> {
         self.average_filled_price
             .map(|d| d.to_f64().unwrap_or_default())
+    }
+
+    #[setter]
+    fn set_average_filled_price(&mut self, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        if let Some(v) = value {
+             self.average_filled_price = Some(extract_decimal(v)?);
+        } else {
+             self.average_filled_price = None;
+        }
+        Ok(())
     }
 
     pub fn __repr__(&self) -> String {

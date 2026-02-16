@@ -187,6 +187,16 @@ impl Engine {
         self.execution_model = Box::new(RealtimeExecutionClient::new());
     }
 
+    /// 注册自定义撮合器 (Python)
+    ///
+    /// :param asset_type: 资产类型
+    /// :param matcher: Python 撮合器对象 (需实现 match 方法)
+    fn register_custom_matcher(&mut self, asset_type: crate::model::AssetType, matcher: Py<PyAny>) {
+        use crate::execution::PyExecutionMatcher;
+        let py_matcher = Box::new(PyExecutionMatcher::new(matcher));
+        self.execution_model.register_matcher(asset_type, py_matcher);
+    }
+
     /// 设置撮合模式
     ///
     /// :param mode: 撮合模式 (ExecutionMode.CurrentClose 或 ExecutionMode.NextOpen)

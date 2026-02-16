@@ -50,11 +50,18 @@ impl pyo3_stub_gen::PyStubType for TradingSession {
 }
 
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 结算方式
 pub enum SettlementType {
     Physical, // 实物交割
     Cash,     // 现金交割
+}
+
+#[pymethods]
+impl SettlementType {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
 }
 
 impl pyo3_stub_gen::PyStubType for SettlementType {
@@ -73,16 +80,30 @@ pub enum AssetType {
     Option,
 }
 
+#[pymethods]
+impl AssetType {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 期权类型
 pub enum OptionType {
     Call,
     Put,
 }
 
+#[pymethods]
+impl OptionType {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 订单类型
 pub enum OrderType {
     Market,
@@ -91,16 +112,30 @@ pub enum OrderType {
     StopLimit,
 }
 
+#[pymethods]
+impl OrderType {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 交易方向
 pub enum OrderSide {
     Buy,
     Sell,
 }
 
+#[pymethods]
+impl OrderSide {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 订单状态
 pub enum OrderStatus {
     New,
@@ -111,8 +146,15 @@ pub enum OrderStatus {
     Expired,
 }
 
+#[pymethods]
+impl OrderStatus {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 订单有效期
 #[allow(clippy::upper_case_acronyms)]
 pub enum TimeInForce {
@@ -122,8 +164,15 @@ pub enum TimeInForce {
     Day, // Good for Day
 }
 
+#[pymethods]
+impl TimeInForce {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 撮合执行模式
 pub enum ExecutionMode {
     CurrentClose, // 当前Bar收盘价成交 (Cheat-on-Close)
@@ -132,8 +181,15 @@ pub enum ExecutionMode {
     NextHighLowMid, // 下一根Bar最高价和最低价的中间价成交
 }
 
+#[pymethods]
+impl ExecutionMode {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
+}
+
 #[pyclass(eq, eq_int)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 /// 交易时段状态
 pub enum TradingSession {
     PreOpen,     // 盘前 (如集合竞价)
@@ -142,4 +198,11 @@ pub enum TradingSession {
     Break,       // 休市 (如午休)
     Closed,      // 闭市
     PostClose,   // 盘后
+}
+
+#[pymethods]
+impl TradingSession {
+    fn __hash__(&self) -> isize {
+        *self as isize
+    }
 }

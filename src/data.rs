@@ -140,11 +140,26 @@ impl CsvDataClient {
 
             let bar = Bar {
                 timestamp: normalize_timestamp(row.timestamp),
-                open: Decimal::from_f64(row.open).unwrap_or(Decimal::ZERO),
-                high: Decimal::from_f64(row.high).unwrap_or(Decimal::ZERO),
-                low: Decimal::from_f64(row.low).unwrap_or(Decimal::ZERO),
-                close: Decimal::from_f64(row.close).unwrap_or(Decimal::ZERO),
-                volume: Decimal::from_f64(row.volume).unwrap_or(Decimal::ZERO),
+                open: Decimal::from_f64(row.open).unwrap_or_else(|| {
+                    log::warn!("Invalid open price {}, defaulting to 0.0", row.open);
+                    Decimal::ZERO
+                }),
+                high: Decimal::from_f64(row.high).unwrap_or_else(|| {
+                    log::warn!("Invalid high price {}, defaulting to 0.0", row.high);
+                    Decimal::ZERO
+                }),
+                low: Decimal::from_f64(row.low).unwrap_or_else(|| {
+                    log::warn!("Invalid low price {}, defaulting to 0.0", row.low);
+                    Decimal::ZERO
+                }),
+                close: Decimal::from_f64(row.close).unwrap_or_else(|| {
+                    log::warn!("Invalid close price {}, defaulting to 0.0", row.close);
+                    Decimal::ZERO
+                }),
+                volume: Decimal::from_f64(row.volume).unwrap_or_else(|| {
+                    log::warn!("Invalid volume {}, defaulting to 0.0", row.volume);
+                    Decimal::ZERO
+                }),
                 symbol: self.symbol.clone(),
                 extra: HashMap::new(),
             };
@@ -384,11 +399,26 @@ pub fn from_arrays(
 
         bars.push(Bar {
             timestamp: normalized_ts,
-            open: Decimal::from_f64(opens[i]).unwrap_or(Decimal::ZERO),
-            high: Decimal::from_f64(highs[i]).unwrap_or(Decimal::ZERO),
-            low: Decimal::from_f64(lows[i]).unwrap_or(Decimal::ZERO),
-            close: Decimal::from_f64(closes[i]).unwrap_or(Decimal::ZERO),
-            volume: Decimal::from_f64(volumes[i]).unwrap_or(Decimal::ZERO),
+            open: Decimal::from_f64(opens[i]).unwrap_or_else(|| {
+                log::warn!("Invalid open price {}, defaulting to 0.0", opens[i]);
+                Decimal::ZERO
+            }),
+            high: Decimal::from_f64(highs[i]).unwrap_or_else(|| {
+                log::warn!("Invalid high price {}, defaulting to 0.0", highs[i]);
+                Decimal::ZERO
+            }),
+            low: Decimal::from_f64(lows[i]).unwrap_or_else(|| {
+                log::warn!("Invalid low price {}, defaulting to 0.0", lows[i]);
+                Decimal::ZERO
+            }),
+            close: Decimal::from_f64(closes[i]).unwrap_or_else(|| {
+                log::warn!("Invalid close price {}, defaulting to 0.0", closes[i]);
+                Decimal::ZERO
+            }),
+            volume: Decimal::from_f64(volumes[i]).unwrap_or_else(|| {
+                log::warn!("Invalid volume {}, defaulting to 0.0", volumes[i]);
+                Decimal::ZERO
+            }),
             symbol: sym,
             extra: bar_extra,
         });
@@ -584,7 +614,10 @@ impl DataFeed {
 
         // Calculate timeout
         let timeout = if let Some(timer_ts) = next_timer_timestamp {
-            let now = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+            let now = Utc::now().timestamp_nanos_opt().unwrap_or_else(|| {
+                log::warn!("Failed to get current timestamp, defaulting to 0");
+                0
+            });
             if timer_ts > now {
                 let diff_ms = (timer_ts - now) / 1_000_000;
                 if diff_ms > 0 {
@@ -630,7 +663,10 @@ impl DataFeed {
         } else {
             // Live logic
             // Calculate timeout
-            let now = Utc::now().timestamp_nanos_opt().unwrap_or(0);
+            let now = Utc::now().timestamp_nanos_opt().unwrap_or_else(|| {
+                log::warn!("Failed to get current timestamp, defaulting to 0");
+                0
+            });
             let timeout = if let Some(tt) = next_timer_ts {
                 if tt > now {
                     let diff_ms = (tt - now) / 1_000_000;
