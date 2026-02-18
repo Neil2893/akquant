@@ -294,8 +294,8 @@ result = run_backtest(
 
 ### 3.4 策略可视化 (Visualization)
 
-回测结束后，光看数字是不够的。我们需要直观地看到资金曲线和买卖点。
-AKQuant 提供了内置的绘图功能（基于 `matplotlib`）。
+回测结束后，光看数字是不够的。我们需要直观地看到各项指标。
+AKQuant 提供了内置的绘图功能。
 
 ```python
 # 在 run_backtest 后添加
