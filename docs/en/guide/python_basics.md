@@ -180,4 +180,4 @@ Here are the most common Python snippets you'll use in AKQuant:
 | **Check Pos** | `pos = self.get_position(bar.symbol)` | How many shares do I hold? |
 | **Order** | `self.buy(bar.symbol, 100)` | Buy 100 shares |
 
-Master these, and you are ready to write your first strategy! Go to [Quant Guide](quant_guide.md) to practice.
+Master these, and you are ready to write your first strategy! Go to [Quant Guide](quant_basics.md) to practice.

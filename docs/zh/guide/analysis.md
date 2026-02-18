@@ -88,6 +88,7 @@
 | :--- | :--- | :--- | :--- |
 | `equity_curve` | 权益曲线 | `pandas.Series` | 索引为时间 (`Datetime`)，值为账户总权益 (`Equity`)。反映账户资产净值的变化趋势。 |
 | `cash_curve` | 现金曲线 | `pandas.Series` | 索引为时间 (`Datetime`)，值为账户可用现金 (`Cash`)。反映账户流动资金的变化情况，有助于资金管理分析。 |
+| `daily_returns` | 日收益率 | `pandas.Series` | 索引为时间 (`Datetime`)，值为每日收益率。用于计算夏普、波动率等指标。 |
 
 ## 交易明细 (Trades)
 
@@ -186,25 +187,34 @@ result.plot(kind="heatmap")
 
 ### 进阶绘图 (Advanced Plotting)
 
-对于更细粒度的控制，可以直接使用 `akquant.plot` 模块。
+对于更细粒度的控制，可以直接使用 `akquant.plot` 模块。注意大部分绘图函数需要传入特定的数据（如 `trades_df` 或 `daily_returns`），而不是 `result` 对象。
 
 ```python
 import akquant.plot as aqp
 
 # 1. 绘制仪表盘 (权益, 回撤, 热力图)
+# 这是一个高级函数，直接接受 result 对象
 aqp.plot_dashboard(result)
 
 # 2. 分析交易分布 (盈亏 vs 持仓时间)
+# 需要传入 trades_df
 aqp.plot_trades_distribution(result.trades_df)
 
-# 3. 绘制滚动指标 (夏普比率, 波动率)
-aqp.plot_rolling_metrics(result)
+# 3. 绘制盈亏与持仓时长散点图
+# 需要传入 trades_df
+aqp.plot_pnl_vs_duration(result.trades_df)
 
-# 4. 绘制年度回报
-aqp.plot_yearly_returns(result)
+# 4. 绘制滚动指标 (夏普比率, 波动率)
+# 需要传入 daily_returns Series
+aqp.plot_rolling_metrics(result.daily_returns)
 
-# 5. 绘制每日回报分布
-aqp.plot_daily_returns_distribution(result)
+# 5. 绘制年度回报
+# 需要传入 daily_returns Series
+aqp.plot_yearly_returns(result.daily_returns)
+
+# 6. 绘制每日回报分布
+# 需要传入 daily_returns Series
+aqp.plot_returns_distribution(result.daily_returns)
 ```
 
 ### 日内回测支持 (Intraday Support)

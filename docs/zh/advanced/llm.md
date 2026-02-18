@@ -14,85 +14,81 @@ Your task is to write trading strategies or backtest scripts based on user requi
 
 1.  **Strategy Structure**:
     *   Inherit from `akquant.Strategy`.
-    *   **Note**: Calling `super().__init__()` is **optional** (Strategy uses `__new__` for initialization), but harmless if called.
-    *   Define parameters in `__init__`.
-    *   **Subscribe (Optional but Recommended)**: Call `self.subscribe(symbol)` in `on_start` to explicitly declare interest. If omitted in backtest, it will be inferred from data.
-    *   Implement trading logic in `on_bar(self, bar: Bar)`.
+    *   **Initialization**: Define parameters in `__init__`. Calling `super().__init__()` is optional but recommended.
+    *   **Subscription**: Call `self.subscribe(symbol)` in `on_start` to explicitly declare interest. In backtest, it's optional if data is provided.
+    *   **Logic**: Implement trading logic in `on_bar(self, bar: Bar)`.
+    *   **Position Helper**: You can use `self.get_position(symbol)` or the `Position` helper class (e.g., `pos = Position(self.ctx, symbol)`).
 
 2.  **Data Access**:
-    *   **Setup (Recommended)**:
+    *   **Warmup Period**:
         *   **Static**: `warmup_period = N` (Class Attribute).
         *   **Dynamic**: `self.warmup_period = N` in `__init__` (Instance Attribute).
-        *   **Auto**: The framework will try to infer N via AST if you use standard indicators (e.g. `SMA(30)`).
-    *   **Setup (Legacy)**: Call `self.set_history_depth(N)` in `on_start`.
-    *   Current bar: `bar.close`, `bar.open`, `bar.high`, `bar.low`, `bar.volume`, `bar.timestamp_str` (Formatted time string).
-    *   History: `self.get_history(count=N, symbol=bar.symbol, field="close")` returns a numpy array.
-    *   **Check Data Sufficiency**: Always check `if len(history) < N: return` before calculating indicators.
+        *   **Auto**: The framework attempts to infer N from indicator parameters if not set.
+    *   **Current Bar**: Access via `bar.close`, `bar.open`, `bar.high`, `bar.low`, `bar.volume`, `bar.timestamp` (pd.Timestamp).
+    *   **History (Numpy)**: `self.get_history(count=N, symbol=None, field="close")` returns a `np.ndarray`.
+    *   **History (DataFrame)**: `self.get_history_df(count=N, symbol=None)` returns a `pd.DataFrame` with OHLCV columns.
+    *   **Check Data Sufficiency**: Always check `if len(history) < N: return`.
 
 3.  **Trading API**:
-    *   Buy: `self.buy(symbol, quantity, price=None, tag=None)`. `price=None` means Market Order.
-    *   Sell: `self.sell(symbol, quantity, price=None, tag=None)`.
-    *   Position: `self.get_position(symbol)` returns float (0 if no position).
-    *   Target: `self.order_target_percent(target, symbol)` or `self.order_target_value(target, symbol)`.
+    *   **Orders**:
+        *   `self.buy(symbol, quantity, price=None)`: Buy (Market if price=None).
+        *   `self.sell(symbol, quantity, price=None)`: Sell.
+        *   `self.order_target_percent(target, symbol)`: Adjust position to target percentage.
+        *   `self.order_target_value(target, symbol)`: Adjust position to target value.
+    *   **Position**: `self.get_position(symbol)` returns current holding (float).
+    *   **Account**: `self.ctx.cash`, `self.ctx.equity`.
 
 4.  **Indicators**:
-    *   Prefer using `akquant.indicators` (e.g., `SMA`, `RSI`) registered in `on_start`.
-    *   Example: `self.register_indicator("sma", SMA(20))` -> access via `self.sma.value`.
+    *   Prefer using `akquant.indicators` (e.g., `SMA`, `RSI`).
+    *   Register in `__init__` or `on_start`: `self.sma = SMA(20); self.register_indicator("sma", self.sma)`.
+    *   Access value via `self.sma.value`.
 
 5.  **Backtest Execution**:
-    *   Use `akquant.run_backtest` with direct arguments for simplicity.
-    *   Example: `run_backtest(data=df, strategy=MyStrat, cash=100_000.0, warmup_period=50)`.
-    *   **Execution Mode**: Default is `ExecutionMode.NextOpen` (trade on next bar open). Options: `ExecutionMode.CurrentClose` (trade on current bar close), `ExecutionMode.NextAverage` (trade on next bar average price (OHLC/4)).
-    *   Timezone: Default is "Asia/Shanghai".
-
-6.  **Configuration**:
-    *   **Risk Config**: Use `RiskConfig` to set parameters like `safety_margin` (default 0.0001), `max_order_size`, and `restricted_list`. The framework applies distinct risk rules for different assets (e.g., Stock Position Limits, Futures Margin Checks, Option Greeks).
-    *   **Market Config**: `SimpleMarket` (T+0, 7x24) now supports full fee rules (stamp tax, transfer fee). `ChinaMarket` enforces T+1 and trading sessions.
-    *   **Margin Trading**: `SimpleMarket` supports **Margin Trading** (e.g. Futures) by default. The system uses an **Equity-based Margin Check** (Free Margin = Equity - Used Margin). You can trade as long as `Free Margin > 0`, even if Cash is negative.
-    *   **Option Trading**: Supported via `AssetType.Option`. Use `Instrument` or `InstrumentConfig` to specify `option_type` ('CALL'/'PUT'), `strike_price`, and `expiry_date`.
-    *   **Execution Architecture**: The engine uses specialized matchers for Stocks, Futures, and Options to handle asset-specific matching logic (e.g., price limits, exercise/assignment).
+    *   Use `akquant.run_backtest` with explicit arguments.
+    *   **Key Parameters**:
+        *   `data`: DataFrame or Dict of DataFrames.
+        *   `strategy`: Strategy class or instance.
+        *   `symbol`: Benchmark symbol or list of symbols.
+        *   `initial_cash`: Float (e.g., 100_000.0).
+        *   `warmup_period`: Int (optional override).
+        *   `execution_mode`: `ExecutionMode.NextOpen` (default), `CurrentClose`, or `NextAverage`.
+        *   `timezone`: Default "Asia/Shanghai".
     *   Example:
         ```python
-        from akquant.config import RiskConfig, StrategyConfig, BacktestConfig
-        risk_config = RiskConfig(safety_margin=0.001, max_order_size=1000, restricted_list=["ST_STOCK"])
-        strategy_config = StrategyConfig(risk=risk_config)
-        backtest_config = BacktestConfig(strategy_config=strategy_config)
-        run_backtest(..., config=backtest_config)
+        run_backtest(
+            data=df,
+            strategy=MyStrategy,
+            initial_cash=100000.0,
+            warmup_period=50,
+            execution_mode=ExecutionMode.NextOpen
+        )
         ```
 
-7.  **Timers**:
-    *   Use `self.add_daily_timer("HH:MM:SS", "payload")` for recurring daily tasks. It works in both Backtest and Live modes.
-    *   Implement logic in `on_timer(self, payload)`.
+6.  **Timers**:
+    *   **Daily**: `self.add_daily_timer("14:55:00", "eod_check")`.
+    *   **One-off**: `self.schedule(timestamp, "payload")`.
+    *   **Callback**: Implement `on_timer(self, payload: str)`.
 
 ### Example Strategy (Reference)
 
 ```python
-from akquant import Strategy, Bar
+from akquant import Strategy, Bar, ExecutionMode, run_backtest
 import numpy as np
 
 class MovingAverageStrategy(Strategy):
-    # Declarative Warmup (Static Default)
+    # Declarative Warmup
     warmup_period = 30
 
-    def __init__(self, fast_window=10, slow_window=20):
-        # super().__init__() is optional here
-        self.fast_window = fast_window
-        self.slow_window = slow_window
-
-        # Dynamic Warmup (Overrides Class Attribute)
-        # Useful when windows are parameters
-        self.warmup_period = slow_window + 10
-
-    def on_start(self):
-        # self.subscribe("600000") # Optional in backtest if data provided
-        # self.set_history_depth(self.slow_window + 10) # No longer needed if warmup_period is set
-        # Alternatively, you can pass `warmup_period` to `run_backtest` function.
-        pass
+    def __init__(self, fast=10, slow=20):
+        self.fast_window = fast
+        self.slow_window = slow
+        # Dynamic warmup override
+        self.warmup_period = slow + 10
 
     def on_bar(self, bar: Bar):
-        # 1. Get History
-        closes = self.get_history(self.slow_window + 1, bar.symbol, "close")
-        if len(closes) < self.slow_window + 1:
+        # 1. Get History (Numpy)
+        closes = self.get_history(self.slow_window + 5, bar.symbol, "close")
+        if len(closes) < self.slow_window:
             return
 
         # 2. Calculate Indicators
@@ -106,6 +102,9 @@ class MovingAverageStrategy(Strategy):
             self.buy(bar.symbol, 1000)
         elif fast_ma < slow_ma and pos > 0:
             self.sell(bar.symbol, pos)
+
+# Execution
+# run_backtest(data=df, strategy=MovingAverageStrategy, ...)
 ```
 ````
 
@@ -116,81 +115,92 @@ class MovingAverageStrategy(Strategy):
 ````markdown
 ### AKQuant ML Strategy Rules
 
-1.  **Framework**: Use `akquant.ml` which provides `QuantModel`, `SklearnAdapter`, and `PyTorchAdapter`.
+1.  **Framework Components**:
+    *   `akquant.ml.QuantModel`: Abstract base class for models.
+    *   `akquant.ml.SklearnAdapter`: Adapter for Scikit-learn models.
+    *   `akquant.ml.PyTorchAdapter`: Adapter for PyTorch models.
+
 2.  **Workflow**:
-    *   Initialize model in `__init__` (e.g., `self.model = SklearnAdapter(...)`).
-    *   Configure validation via `self.model.set_validation(method='walk_forward', ...)` to enable auto-retraining.
-    *   Implement `prepare_features(self, df, mode='training')` to generate X, y for **training**.
-    *   In `on_bar`, perform **inference** by calling `self.prepare_features(hist_df, mode='inference')` and then `self.model.predict(X)`.
+    *   **Initialization**: In `__init__`, initialize `self.model` with an adapter.
+    *   **Configuration**: Call `self.model.set_validation(...)` to configure Walk-Forward Validation. This automatically sets up the rolling window and training triggers.
+    *   **Feature Engineering**: Implement `prepare_features(self, df, mode)` method.
+    *   **Training**: The framework automatically calls `on_train_signal` -> `prepare_features(mode='training')` -> `model.fit()` based on the validation config.
+    *   **Inference**: In `on_bar`, manually call `prepare_features(mode='inference')` and then `model.predict()`.
+
 3.  **Data Handling**:
-    *   **Training**: The framework calls `prepare_features(df, mode='training')` automatically during rolling windows. `df` contains historical bars. You must return `(X, y)` where `y` is aligned with `X`. Typically, `y` is shifted (future return), so you must drop rows with NaNs.
-    *   **Inference**: In `on_bar`, call `prepare_features(df, mode='inference')` to get features for the *current* moment. The logic should return the last row of features (X) corresponding to the current bar.
+    *   `prepare_features(df, mode)`:
+        *   `df`: Contains historical bars (length determined by rolling window).
+        *   `mode='training'`: Return `(X, y)`. Drop NaNs. Align `y` (e.g., shifted returns) with `X`.
+        *   `mode='inference'`: Return `X` (or just the last row for the current bar).
 
 ### Example ML Strategy (Reference)
 
 ```python
 from akquant import Strategy, Bar
 from akquant.ml import SklearnAdapter
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 import numpy as np
 
 class MLStrategy(Strategy):
     def __init__(self):
         # 1. Initialize Adapter
-        self.model = SklearnAdapter(LogisticRegression())
+        self.model = SklearnAdapter(RandomForestClassifier(n_estimators=10))
 
         # 2. Configure Walk-Forward (Auto-Training)
+        # This sets rolling window and triggers on_train_signal automatically
         self.model.set_validation(
             method='walk_forward',
-            train_window=200, # Train on last 200 bars
-            rolling_step=50,  # Retrain every 50 bars
+            train_window='200d', # Train on last 200 days data
+            rolling_step='30d',  # Retrain every 30 days
             frequency='1d',
-            incremental=False, # Set True to use partial_fit (faster)
-            verbose=True      # Print training logs
+            verbose=True
         )
-        # Ensure history depth covers training window
-        self.set_history_depth(250)
 
     def prepare_features(self, df: pd.DataFrame, mode: str = "training"):
-        """Called by framework for TRAINING data preparation"""
-        X = pd.DataFrame()
-        X['ret1'] = df['close'].pct_change()
-        X['ret2'] = df['close'].pct_change(2)
-        # X = X.fillna(0) # Avoid polluting data with 0s
+        """
+        Feature Engineering
+        df: Raw OHLCV DataFrame
+        """
+        # Calculate features
+        df['ret1'] = df['close'].pct_change()
+        df['ret5'] = df['close'].pct_change(5)
+        df['vol_change'] = df['volume'].pct_change()
+
+        features = ['ret1', 'ret5', 'vol_change']
 
         if mode == 'inference':
-            # Inference: Return only the last row (latest features)
-            # Input df contains history + current bar
-            return X.iloc[-1:]
+            # Return last row for prediction
+            return df[features].iloc[-1:].fillna(0)
 
-        # Training: Construct labels
-        future_ret = df['close'].pct_change().shift(-1)
+        # Training Mode
+        # Label: 1 if next day return > 0, else 0
+        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
 
-        # Combine and drop NaNs
-        data = pd.concat([X, future_ret.rename("y")], axis=1)
-        data = data.dropna()
-
-        return data[['ret1', 'ret2']], (data['y'] > 0).astype(int)
+        data = df.dropna()
+        return data[features], data['target']
 
     def on_bar(self, bar: Bar):
         # 3. Inference (Real-time)
-        # Get recent history to construct current features
-        hist_df = self.get_history_df(10) # Need enough history for features
+        # Ensure enough history for feature calculation
+        hist_df = self.get_history_df(30) # Small buffer for features
+        if len(hist_df) < 10:
+            return
 
-        # Reuse prepare_features logic!
+        # Prepare single sample
         X_curr = self.prepare_features(hist_df, mode='inference')
 
+        # Predict
         try:
-            # Predict
-            pred = self.model.predict(X_curr)[0] # SklearnAdapter returns proba for class 1 or label
+            pred = self.model.predict(X_curr)[0]
+            pos = self.get_position(bar.symbol)
 
-            if pred > 0.55:
-                self.buy(bar.symbol, 100)
-            elif pred < 0.45:
-                self.sell(bar.symbol, 100)
-        except:
-            pass # Model might not be ready
+            if pred == 1 and pos == 0:
+                self.buy(bar.symbol, 1000)
+            elif pred == 0 and pos > 0:
+                self.sell(bar.symbol, pos)
+        except Exception:
+            pass # Model might not be trained yet
 ```
 ````
 
@@ -198,28 +208,68 @@ class MLStrategy(Strategy):
 
 ### 场景 A：编写一个双均线策略
 
-**用户提问**:
-> 请帮我写一个 AKQuant 策略，使用 5日和 20日均线金叉买入，死叉卖出，标的是 "AAPL"。
+"Help me write a Dual Moving Average strategy using AKQuant.
+Requirements:
+1.  Fast MA = 10, Slow MA = 60.
+2.  Buy when Fast crosses above Slow.
+3.  Sell when Fast crosses below Slow.
+4.  Use `get_history` to fetch data and numpy for calculation.
+5.  Set `warmup_period` correctly."
 
-**推荐补充信息**:
-> (将上面的 Core Prompt 粘贴在最前面，或者作为系统提示词)
+### 场景 B：编写一个机器学习策略
 
-## 4. 注意事项与常见问题 (Troubleshooting)
+"Help me write an ML strategy using AKQuant.
+Requirements:
+1.  Use `RandomForestClassifier` via `SklearnAdapter`.
+2.  Features: RSI(14), MACD, and Log Returns.
+3.  Label: Next day return > 0.
+4.  Validation: Walk-Forward, train on 500 bars, retrain every 100 bars.
+5.  Implement `prepare_features` correctly handling both training and inference modes."
 
-### 4.1 时间范围限制 (Time Range Limitations)
-*   **Pandas 限制**: 由于底层依赖 Pandas 的 `datetime64[ns]` 类型，回测的**起始时间不能早于 1678 年 9 月**。
-*   **错误现象**: 如果设置更早的时间（如 1200 年），会报 `pandas.errors.OutOfBoundsDatetime` 错误。
-*   **Rust 引擎**: 虽然 Rust 引擎底层已支持超长周期（使用 u64 纳秒存储），但受限于 Python 接口，建议将回测时间控制在 1678 年 - 2262 年之间。
+## 4. 进阶技巧与排错 (Advanced Tips & Troubleshooting)
 
-### 4.2 绩效指标中的时长 (Duration)
-*   `BacktestResult.metrics.duration` 和 `ClosedTrade.duration` 现在返回 Python 的 `datetime.timedelta` 对象。
-*   这解决了超长回测周期（超过 292 年）导致的时间计算溢出问题。
+### 4.1 详细回测结果分析
 
-### 4.3 时区处理 (Timezone Handling)
-217→*   `prepare_dataframe` 默认使用 `ambiguous='NaT'` 和 `nonexistent='shift_forward'` 处理时区转换。
-218→*   这意味着在夏令时切换或无效时间点，系统会自动修正或标记为 NaT，防止程序崩溃。
-219→
-220→### 4.4 杠杆与保证金指标 (Leverage & Margin Metrics)
-221→*   `BacktestResult.metrics_df` 现在包含两个关键的风险指标，用于监控期货或杠杆交易：
-222→    *   **max_leverage**: 最大杠杆率 ($\text{Gross Market Value} / \text{Equity}$)。
-223→    *   **min_margin_level**: 最低保证金水平 ($\text{Equity} / \text{Used Margin}$)。如果此值接近 1.0，表示有爆仓风险。
+`run_backtest` 返回的 `BacktestResult` 对象包含了丰富的数据，可用于深入分析：
+
+*   **绩效指标**: `result.metrics` (Object) 或 `result.metrics_df` (DataFrame)。
+    *   包括 `total_return_pct`, `sharpe_ratio`, `max_drawdown_pct`, `win_rate` 等。
+*   **资金曲线**: `result.equity_curve` (DataFrame)。
+*   **交易记录**: `result.trades_df` (所有已平仓交易详情)。
+*   **可视化**:
+    *   `result.plot(symbol="...")`: 使用 Plotly 生成交互式图表（需安装 `plotly`）。
+    *   `result.report(filename="report.html")`: 生成完整的 HTML 回测报告。
+
+### 4.2 风险管理 (Risk Management)
+
+可以通过 `RiskConfig` 配置风控规则，防止意外的大额亏损或违规操作：
+
+```python
+from akquant.config import RiskConfig, StrategyConfig, BacktestConfig
+
+# 配置风控参数
+risk_config = RiskConfig(
+    safety_margin=0.0001,       # 资金安全垫
+    max_order_size=10000,       # 单笔最大委托数量
+    max_position_size=0.5,      # 单个标的最大持仓比例 (50%)
+    restricted_list=["ST_STOCK"] # 限制交易名单
+)
+
+# 应用配置
+strategy_config = StrategyConfig(risk=risk_config)
+run_backtest(..., config=BacktestConfig(strategy_config=strategy_config))
+```
+
+### 4.3 常见错误排查
+
+1.  **"History tracking is not enabled"**:
+    *   **原因**: 未设置 `warmup_period` 或 `set_history_depth`，导致无法获取历史数据。
+    *   **解决**: 在类定义中设置 `warmup_period = N` 或在 `__init__` 中设置 `self.warmup_period = N`。
+
+2.  **"Context not ready"**:
+    *   **原因**: 在 `__init__` 中调用了需要 Context 的方法（如 `get_history`, `buy`）。
+    *   **解决**: 将逻辑移至 `on_start` 或 `on_bar` 中。
+
+3.  **订单被拒绝 (Order Rejected)**:
+    *   **原因**: 资金不足、触及风控限制、或者不在交易时段。
+    *   **解决**: 检查 `result.orders_df` 中的 `reject_reason` 字段；调整 `initial_cash` 或 `risk_config`。

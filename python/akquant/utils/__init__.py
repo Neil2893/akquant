@@ -351,6 +351,7 @@ def df_to_arrays(
             # Skip non-numeric extra columns
             pass
 
+    # print(f"DEBUG: df_to_arrays extra keys: {list(extra.keys())}")
     return (
         timestamps,
         opens,

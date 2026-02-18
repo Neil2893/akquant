@@ -69,7 +69,7 @@
 - **最大回撤 (Max Drawdown)**：策略从历史最高点跌下来的最大幅度。如果最大回撤是 -50%，意味着你的资产可能腰斩。
 - **夏普比率 (Sharpe Ratio)**：衡量性价比的指标。每承担一份风险，能换来多少超额收益。
 
-> 想要深入了解所有回测指标的含义（如索提诺比率、胜率等），请参考 **[回测结果详解](backtest_result.md)**。
+> 想要深入了解所有回测指标的含义（如索提诺比率、胜率等），请参考 **[回测结果详解](analysis.md)**。
 
 ### 第四幕：刻舟求剑的陷阱 (过拟合)
 **故事**：
@@ -199,7 +199,53 @@ if __name__ == "__main__":
     print(f"总收益率: {result.total_return * 100:.2f}%")
 ```
 
-### 3.2 进阶：如何获取真实数据？
+### 3.2 进阶策略：均值回归 (Mean Reversion)
+
+除了趋势跟踪（如双均线），另一种常见的策略是**均值回归**。
+它的核心思想是：价格总是围绕价值上下波动，涨多了会跌，跌多了会涨。
+
+**策略逻辑 (布林带策略 Bollinger Bands)**：
+- **中轨**：20日均线
+- **上轨**：中轨 + 2倍标准差
+- **下轨**：中轨 - 2倍标准差
+- **买入**：价格跌破下轨（超跌），且开始反弹。
+- **卖出**：价格突破上轨（超买），或回归中轨。
+
+```python
+class BollingerStrategy(Strategy):
+    def __init__(self):
+        self.window = 20
+        self.std_dev = 2
+
+    def on_bar(self, bar):
+        # 获取足够的历史数据
+        hist = self.history_data(n=self.window + 1)
+        if len(hist) < self.window:
+            return
+
+        closes = hist['close'].values
+        # 计算布林带
+        ma = np.mean(closes[-self.window:])
+        std = np.std(closes[-self.window:])
+        upper = ma + self.std_dev * std
+        lower = ma - self.std_dev * std
+
+        current_price = bar.close
+        position = self.get_position(bar.symbol)
+
+        # 策略逻辑：
+        # 1. 价格跌破下轨，买入（视为超跌）
+        if current_price < lower and position == 0:
+            self.buy(bar.symbol, 100)
+            print(f"[{bar.datetime}] 超跌买入 {bar.symbol} @ {current_price:.2f}")
+
+        # 2. 价格回归中轨或突破上轨，卖出（止盈）
+        elif (current_price > ma or current_price > upper) and position > 0:
+            self.sell(bar.symbol, 100)
+            print(f"[{bar.datetime}] 回归卖出 {bar.symbol} @ {current_price:.2f}")
+```
+
+### 3.3 实战：获取真实数据
 
 上面的例子使用了模拟数据。在实战中，你需要获取真实的股票数据。
 我们推荐使用 **AKShare**，它是目前最流行的开源中文金融数据接口库，数据覆盖面极广。
@@ -244,6 +290,52 @@ result = run_backtest(
 )
 ```
 
+### 3.4 策略可视化 (Visualization)
+
+回测结束后，光看数字是不够的。我们需要直观地看到资金曲线和买卖点。
+AKQuant 提供了内置的绘图功能（基于 `matplotlib`）。
+
+```python
+# 在 run_backtest 后添加
+
+# 绘制资金曲线
+result.plot()
+# 或者使用更详细的绘图工具（如果已安装 matplotlib）
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(12, 6))
+plt.plot(result.equity_curve, label='Strategy Equity')
+plt.title('Strategy Performance')
+plt.legend()
+plt.show()
+```
+
+### 3.5 参数调优 (Parameter Optimization)
+
+你可能会问：“为什么均线是 5日和 20日？改成 10日和 30日会不会更好？”
+这就是**参数调优**要做的事。我们可以遍历不同的参数组合，找到历史表现最好的一组。
+
+```python
+# 简单的网格搜索示例
+best_sharpe = -100
+best_params = (0, 0)
+
+for short_w in range(3, 10):
+    for long_w in range(15, 30):
+        if short_w >= long_w: continue
+
+        # 动态修改策略参数（需稍微调整策略类以支持传入参数）
+        # 这里仅为伪代码演示思路
+        print(f"Testing: short={short_w}, long={long_w}...")
+        # result = run_backtest(...)
+        # if result.sharpe_ratio > best_sharpe:
+        #     best_sharpe = result.sharpe_ratio
+        #     best_params = (short_w, long_w)
+
+print(f"最佳参数: {best_params}, 夏普比率: {best_sharpe}")
+```
+> **注意**：参数调优容易导致**过拟合**，请务必在样本外数据（Out-of-Sample）上进行验证。
+
 ---
 
 ## 4. 读懂回测报告：核心指标解读
@@ -286,6 +378,14 @@ result = run_backtest(
 - **原因**：可能是资金不足（Cash不够买1手）或未达到最小交易单位。
 - **解决**：打印 `self.cash` 查看可用资金；检查 `self.buy` 的数量是否合理。
 
+### 5.4 忽视复权 (Ignoring Adjustment)
+
+- **现象**：股票发生拆股或分红时，价格突然跳水，导致策略误判为暴跌卖出。
+- **原因**：使用的是**不复权**数据。例如 10元 拆成 5元，价格腰斩但价值没变。
+- **解决**：**必须使用前复权 (qfq) 数据**进行回测。
+    - 前复权：以当前价格为基准，修正历史价格，保持价格连续性。
+    - AKShare 获取数据时务必指定 `adjust="qfq"`。
+
 ---
 
 ## 6. 下一步学习建议
@@ -300,11 +400,11 @@ result = run_backtest(
     - **网格交易 (Grid Trading)**：学习震荡市的自动化套利。
     - **多因子模型 (Multi-Factor)**：学习机构主流的选股逻辑。
 3.  **风险管理**：深入理解凯利公式 (Kelly Criterion)、波动率控制等资金管理方法。
-4.  **机器学习**：尝试用机器学习模型（如随机森林、LSTM）来预测价格或波动率（参考 [ML Guide](../ml_guide.md)）。
+4.  **机器学习**：尝试用机器学习模型（如随机森林、LSTM）来预测价格或波动率（参考 [ML Guide](../advanced/ml.md)）。
 
 ### 6.2 推荐资源
 
 - **书籍**：《打开量化投资的黑箱》、《海龟交易法则》、《Python for Finance》。
-- **实战**：多看 [Examples](../examples.md) 中的代码，尝试修改参数，观察结果变化。
+- **实战**：多看 [Examples](examples.md) 中的代码，尝试修改参数，观察结果变化。
 
-希望这份指南能帮你顺利开启量化之旅！更多进阶功能请参考 [API 文档](../api.md)。
+希望这份指南能帮你顺利开启量化之旅！更多进阶功能请参考 [API 文档](../reference/api.md)。

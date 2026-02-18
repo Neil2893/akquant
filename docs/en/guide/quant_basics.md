@@ -273,10 +273,10 @@ Congratulations on completing the beginner guide! To become a more professional 
     *   **Grid Trading**: Learn automated arbitrage in oscillating markets.
     *   **Multi-Factor**: Learn the stock selection logic used by institutions.
 3.  **Risk Management**: Deep dive into Kelly Criterion, volatility targeting, etc.
-4.  **Machine Learning**: Try predicting prices or volatility using ML models (see [ML Guide](../ml_guide.md)).
+4.  **Machine Learning**: Try predicting prices or volatility using ML models (see [ML Guide](../advanced/ml.md)).
 
 ### 6.2 Recommended Resources
 *   **Books**: "Inside the Black Box", "Way of the Turtle", "Python for Finance".
-*   **Practice**: Read code in [Examples](../examples.md), try modifying parameters, and observe result changes.
+*   **Practice**: Read code in [Examples](examples.md), try modifying parameters, and observe result changes.
 
-Hope this guide helps you start your quantitative journey! For advanced features, please refer to the [API Reference](../api.md).
+Hope this guide helps you start your quantitative journey! For advanced features, please refer to the [API Reference](../reference/api.md).

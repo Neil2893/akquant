@@ -163,4 +163,4 @@ python verify.py
 ```
 
 如果看到“环境搭建成功”，恭喜你，你的兵器库已经准备完毕！
-下一步，请前往 [Python 金融入门](py_guide.md) 学习基础语法，或直接查看 [量化新手指南](quant_guide.md) 开始实战。
+下一步，请前往 [Python 金融入门](../guide/python_basics.md) 学习基础语法，或直接查看 [量化新手指南](../guide/quant_basics.md) 开始实战。

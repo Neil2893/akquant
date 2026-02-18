@@ -33,7 +33,7 @@ The latest version features a modular design, independent portfolio management, 
 *   **Machine Learning (New)**:
     *   **ML Framework**: Built-in high-performance ML training framework supporting Walk-forward Validation.
     *   **Adapter Pattern**: Unifies Scikit-learn and PyTorch interfaces.
-    *   **📖 [Machine Learning Guide](ml_guide.md)**: Learn how to build AI-driven strategies.
+    *   **📖 [Machine Learning Guide](advanced/ml.md)**: Learn how to build AI-driven strategies.
 *   **Flexible Configuration**:
     *   **StrategyConfig**: Global strategy configuration.
     *   **ExecutionMode**: Supports `CurrentClose` and `NextOpen` modes.
@@ -81,7 +81,7 @@ AKQuant aims to solve the performance bottlenecks of traditional Python backtest
 
 ## Installation
 
-For detailed installation steps, please refer to the **[Installation Guide](installation.md)**.
+For detailed installation steps, please refer to the **[Installation Guide](start/installation.md)**.
 
 ## Quick Start
 

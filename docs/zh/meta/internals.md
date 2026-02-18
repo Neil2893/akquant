@@ -21,12 +21,24 @@ akquant/
 ├── Makefile                # 项目管理命令
 ├── src/                    # Rust 核心源码 (底层实现)
 │   ├── lib.rs              # PyO3 模块入口，注册 Python 模块
-│   ├── engine.rs           # 回测引擎：驱动时间轴与事件循环
-│   ├── execution.rs        # 执行层：模拟交易所撮合逻辑
-│   ├── market.rs           # 市场层：定义佣金、印花税、T+1 规则
+│   ├── engine/             # 回测引擎模块
+│   │   ├── core.rs         # 核心引擎：驱动时间轴与事件循环
+│   │   ├── state.rs        # 引擎状态管理
+│   │   └── python.rs       # Python 绑定
+│   ├── execution/          # 执行层：模拟交易所撮合逻辑
+│   │   ├── matcher.rs      # 撮合器 Trait 定义
+│   │   ├── simulated.rs    # 模拟执行客户端
+│   │   ├── realtime.rs     # 实盘执行客户端
+│   │   └── slippage.rs     # 滑点模型
+│   ├── market/             # 市场层：定义费率、T+1 规则、交易时段
+│   │   ├── china.rs        # 中国市场规则 (A股/期货)
+│   │   ├── simple.rs       # 简单市场规则 (7x24, T+0)
+│   │   └── stock.rs/futures.rs # 具体资产逻辑
 │   ├── portfolio.rs        # 账户层：管理资金、持仓与可用头寸
-│   ├── data.rs             # 数据层：管理 Bar/Tick 数据流
-│   ├── analysis.rs         # 分析层：计算绩效指标 (Sharpe, Drawdown)
+│   ├── data/               # 数据层：管理 Bar/Tick 数据流
+│   │   ├── feed.rs         # 数据源
+│   │   └── aggregator.rs   # K线合成器
+│   ├── analysis/           # 分析层：计算绩效指标 (Sharpe, Drawdown)
 │   ├── context.rs          # 上下文：用于 Python 回调的数据快照
 │   ├── clock.rs            # 时钟模块：统一时间管理
 │   ├── event.rs            # 事件系统：定义系统内部事件
@@ -43,27 +55,27 @@ akquant/
 │   └── akquant/            # Python 包源码 (用户接口)
 │       ├── __init__.py     # 导出公共 API
 │       ├── strategy.py     # Strategy 基类：封装上下文，提供 ML 训练与交易接口
-│       ├── backtest.py     # BacktestResult 分析与 DataFrame 转换
+│       ├── backtest/       # 回测结果处理
+│       │   ├── engine.py   # 高级入口 run_backtest
+│       │   └── result.py   # BacktestResult 分析与 DataFrame 转换
 │       ├── config.py       # 配置定义：BacktestConfig, StrategyConfig, RiskConfig
 │       ├── risk.py         # 风控配置适配层
 │       ├── data.py         # 数据加载与目录服务 (DataCatalog)
 │       ├── sizer.py        # Sizer 基类：提供多种仓位管理实现
 │       ├── indicator.py    # Python 指标接口
 │       ├── optimize.py     # 参数优化工具
-│       ├── plot.py         # 绘图工具
+│       ├── plot/           # 绘图工具包
 │       ├── log.py          # 日志模块
-│       ├── utils.py        # 工具函数
-│       ├── ml/             # 机器学习框架 (New)
+│       ├── utils/          # 工具函数
+│       ├── ml/             # 机器学习框架
 │       │   ├── __init__.py
 │       │   └── model.py    # QuantModel, SklearnAdapter, ValidationConfig
 │       └── akquant.pyi     # 类型提示文件 (IDE 补全支持)
 ├── tests/                  # 测试用例
 └── examples/               # 示例代码
-    ├── benchmark_akquant_multi.py  # 多线程 Benchmark
-    ├── ml_framework_demo.py        # ML 框架基础示例
-    ├── ml_walk_forward_demo.py     # 滚动训练示例
-    ├── optimization_demo.py        # 参数优化示例
-    └── plot_demo.py                # 绘图示例
+    ├── 01_quickstart.py    # 快速上手
+    ├── 07_ml_framework.py  # ML 框架基础示例
+    └── ...                 # 其他示例
 ```
 
 ## 2. 核心组件架构详解
@@ -73,35 +85,49 @@ akquant/
 为了保证跨语言交互的性能与类型安全，核心数据结构均在 Rust 中定义并导出。
 
 *   **`types.rs`**:
-    *   `ExecutionMode`: `CurrentClose` (当前收盘价成交，即 Cheat-on-Close) vs `NextOpen` (次日开盘价成交，更真实)。
+    *   `ExecutionMode`:
+        *   `CurrentClose`: 当前 Bar 收盘价成交 (Cheat-on-Close)。
+        *   `NextOpen`: 次日开盘价成交 (更真实)。
+        *   `NextAverage`: 次日均价成交 (TWAP/VWAP 模拟)。
     *   `OrderSide`: `Buy` / `Sell`。
-    *   `OrderType`: `Market` (市价), `Limit` (限价)。
+    *   `OrderType`: `Market` (市价), `Limit` (限价), `StopMarket` (止损市价), `StopLimit` (止损限价)。
     *   `TimeInForce`: `Day` (当日有效), `GTC` (撤前有效), `IOC`/`FOK`。
-*   **`instrument.rs`**: `Instrument` 包含 `multiplier` (合约乘数) 和 `tick_size`。
+    *   `AssetType`: `Stock`, `Fund`, `Futures`, `Option`。
+*   **`instrument.rs`**: `Instrument` 包含 `multiplier` (合约乘数), `tick_size`, `margin_ratio` 等。
 *   **`market_data.rs`**: `Bar` (OHLCV) 和 `Tick` (最新价/量)。
 
-### 2.2 执行层 (`src/execution.rs`)
+### 2.2 执行层 (`src/execution/`)
 
-`ExchangeSimulator` 是回测准确性的核心，负责模拟交易所的撮合逻辑。
+`ExecutionClient` Trait 定义了执行层的标准接口，支持模拟和实盘的无缝切换。
 
-*   **撮合机制**:
+*   **`SimulatedExecutionClient` (`simulated.rs`)**:
+    *   负责回测时的订单撮合。
+    *   内置 `ExecutionMatcher`，支持多种撮合逻辑。
+    *   **滑点模型 (`slippage.rs`)**: 支持 `FixedSlippage` (固定金额) 和 `PercentSlippage` (百分比)。
+*   **撮合机制 (`matcher.rs`)**:
     *   **限价单 (Limit)**: 买入需 `Low <= Price`，卖出需 `High >= Price`。
     *   **市价单 (Market)**: 根据 `ExecutionMode` 决定按 `Close` 或 `Open` 成交。
-*   **触发机制**: 支持 `trigger_price` (止损/止盈单)。
+    *   **触发机制**: 支持 `trigger_price` (止损/止盈单)。
 
-### 2.3 市场规则层 (`src/market.rs`)
+### 2.3 市场规则层 (`src/market/`)
 
-通过 `MarketModel` Trait 实现不同市场的规则隔离。目前内置 `ChinaMarket` (A股市场规则)：
+通过 `MarketModel` Trait 实现不同市场的规则隔离。
 
-*   **佣金计算**: 支持股票 (印花税、过户费、佣金) 和期货 (按手或按金额)。
-*   **交易限制**: 严格的 T+1 (股票) 与 T+0 (期货) 可用持仓管理。
+*   **`ChinaMarket` (`china.rs`)**:
+    *   实现 A 股和国内期货的市场规则。
+    *   **交易时段**: 支持集合竞价 (CallAuction)、连续竞价 (Continuous)、休市 (Break) 等状态管理。
+    *   **费率计算**: 支持股票 (印花税、过户费、佣金) 和期货 (按手或按金额)。
+    *   **T+1/T+0**: 严格的可用持仓管理 (昨仓/今仓)。
+*   **`SimpleMarket` (`simple.rs`)**:
+    *   7x24 小时交易，T+0，无税，适用于加密货币或外汇回测。
 
-### 2.4 风控层 (`src/risk.rs`)
+### 2.4 风控层 (`src/risk/`)
 
 `RiskManager` 独立于执行层，拦截每一笔订单：
 
 *   **检查规则**: 限制名单、最大单笔数量/金额、最大持仓比例。
 *   **配置**: Python 端 `RiskConfig` 自动注入 Rust 引擎。
+*   支持针对不同资产类型 (Stock/Futures/Option) 的特定风控规则。
 
 ### 2.5 账户层 (`src/portfolio.rs`)
 
@@ -112,7 +138,7 @@ akquant/
 *   `available_positions`: 可卖持仓 (T+1 逻辑的核心)。
 *   **权益计算**: 实时 Mark-to-Market 计算。
 
-### 2.6 引擎层 (`src/engine.rs` & `src/history.rs`)
+### 2.6 引擎层 (`src/engine/` & `src/history.rs`)
 
 `Engine` 是系统的驱动器：
 
@@ -120,9 +146,10 @@ akquant/
 *   **历史数据管理**: `Engine` 内部维护 `History` 模块，这是一个高效的环形缓冲区，用于存储最近 N 个 Bar 的数据，供策略通过 `get_history` 快速访问，无需在 Python 端累积数据。
 *   **日切处理**: 触发 T+1 解锁、过期订单清理。
 
-### 2.7 分析层 (`src/analysis.rs`)
+### 2.7 分析层 (`src/analysis/`)
 
 遵循标准 PnL 计算：`Gross PnL` (毛利), `Net PnL` (净利), `Commission` (佣金)。
+`BacktestResult` 包含详细的绩效指标 (`PerformanceMetrics`) 和交易记录 (`ClosedTrade`)。
 
 ### 2.8 Python 抽象层 (`python/akquant/`)
 
@@ -134,10 +161,11 @@ akquant/
         *   `set_rolling_window(train, step)`: 配置滚动训练参数。
         *   `on_train_signal(context)`: 周期性触发模型训练。
         *   `prepare_features(df)`: 特征工程接口。
-*   **`BacktestResult` (`backtest.py`)**:
+*   **`run_backtest` (`backtest/engine.py`)**: 高级入口函数，统一处理配置注入、策略实例化和引擎启动。
+*   **`BacktestResult` (`backtest/result.py`)**:
     *   封装 Rust 返回的 `BacktestResult`。
     *   提供 `metrics_df`, `positions` 等便捷属性。
-*   **`Sizer` (`sizer.py`)**: 仓位管理基类。
+    *   支持 `plot()` 方法直接生成分析图表。
 
 ### 2.9 机器学习框架 (`python/akquant/ml/`)
 
@@ -149,12 +177,6 @@ akquant/
     *   **`set_validation`**: 配置 Walk-forward Validation 参数 (训练窗口、测试窗口、滚动步长)。
 *   **`SklearnAdapter`**:
     *   封装 Scikit-learn 风格的模型 (如 RandomForest, LinearRegression)，使其适配 `QuantModel` 接口。
-*   **工作流**:
-    1.  用户在策略中定义模型 `self.model = SklearnAdapter(RandomForestClassifier())`。
-    2.  设置滚动参数 `self.set_rolling_window(train_window=250, step=20)`。
-    3.  重写 `prepare_features` 将原始 OHLCV 转换为特征 (X) 和 标签 (y)。
-    4.  回测过程中，引擎自动在指定步长触发 `on_train_signal`，策略自动获取历史数据并训练模型。
-    5.  在 `on_bar` 中调用 `self.model.predict` 生成信号。
 
 ## 3. 关键工作流详解
 
@@ -164,6 +186,7 @@ akquant/
 
 *   **NextOpen**: 推荐模式。Bar Close 生成信号 -> Next Bar Open 成交。
 *   **CurrentClose**: 简化模式。Bar Close 生成信号 -> Current Bar Close 成交 (Cheat-on-Close)。
+*   **NextAverage**: Bar Close 生成信号 -> Next Bar VWAP/Average 成交。
 
 ### 3.2 订单全生命周期
 
@@ -175,7 +198,7 @@ Signal -> Creation -> Submission -> Risk Check (Rust) -> Matching (Rust) -> Sett
 
 1.  `src/model/types.rs`: 添加枚举。
 2.  `src/model/order.rs`: 更新结构体。
-3.  `src/execution.rs`: 实现撮合逻辑。
+3.  `src/execution/matcher.rs`: 实现撮合逻辑。
 4.  `akquant.pyi`: 更新类型提示。
 
 ### 4.2 如何自定义指标

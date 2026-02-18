@@ -28,7 +28,7 @@
 * `on_order`: 订单状态变化时触发 (如提交、成交、取消)。
 * `on_trade`: 收到成交回报时触发。
 * `on_timer`: 定时器触发时调用 (需手动注册)。
-* `on_stop`: 策略停止时调用，适合进行资源清理或结果统计 (参考 Backtrader `stop` / Nautilus `on_stop`)。
+* `on_stop`: 策略停止时调用，适合进行资源清理或结果统计。
 * `on_train_signal`: 滚动训练触发信号 (仅在 ML 模式下触发)。
 
 ## 3. 常用工具 (Utilities)
@@ -105,29 +105,49 @@ AKQuant 提供了两种风格的策略开发接口：
 | **代码结构** | 面向对象，逻辑封装性好 | 脚本化，简单直观 |
 | **API 调用** | `self.buy()`, `self.ctx` | `ctx.buy()`, `ctx` 作为参数传递 |
 
-## 4. 编写类风格策略 (Class-based) {: #class-based }
+## 5. 编写类风格策略 (Class-based) {: #class-based }
 
 这是 AKQuant 推荐的策略编写方式，结构清晰，易于扩展。
+
+### 5.1 数据预热 (Warmup Period)
+
+在计算技术指标（如 MA, RSI）时，需要一定长度的历史数据。AKQuant 提供了 `warmup_period` 机制来自动处理数据预加载。
+
+*   **静态设置 (推荐)**: 在类中定义 `warmup_period = N`。
+*   **动态设置**: 在 `__init__` 中设置 `self.warmup_period = N`。
+*   **自动推断**: 如果使用内置指标，框架会尝试自动计算所需长度（但显式设置更安全）。
+
+### 5.2 历史数据获取
+
+*   **`self.get_history(count, ...)`**: 返回 `numpy.ndarray`，性能最高，适合计算指标。
+*   **`self.get_history_df(count, ...)`**: 返回 `pandas.DataFrame`，包含 OHLCV，适合复杂分析。
+
+### 5.3 完整示例
 
 ```python
 from akquant import Strategy, Bar
 import numpy as np
 
 class MyStrategy(Strategy):
+    # 声明需要的预热数据长度 (例如 20日均线需要至少 20 根 Bar)
+    warmup_period = 20
+
     def __init__(self, ma_window=20):
         # 注意: Strategy 类使用了 __new__ 进行初始化，子类不再需要调用 super().__init__()
         self.ma_window = ma_window
+        # 如果参数影响预热长度，可以动态覆盖
+        self.warmup_period = ma_window + 5
 
     def on_start(self):
         # 显式订阅数据
         self.subscribe("600000")
 
     def on_bar(self, bar: Bar):
-        # 1. 获取历史数据 (Online 模式)
-        # 获取最近 N 个收盘价
+        # 1. 获取历史数据
+        # 返回 numpy array: [close_t-N, ..., close_t-1, close_t]
         history = self.get_history(count=self.ma_window, symbol=bar.symbol, field="close")
 
-        # 检查数据是否足够
+        # 检查数据是否足够 (虽然 warmup_period 会保证，但防御性编程是好习惯)
         if len(history) < self.ma_window:
             return
 
@@ -135,7 +155,7 @@ class MyStrategy(Strategy):
         ma_value = np.mean(history)
 
         # 2. 交易逻辑
-        # 获取当前持仓
+        # 获取当前持仓 (使用 Position Helper 或 get_position)
         pos = self.get_position(bar.symbol)
 
         if bar.close > ma_value and pos == 0:
@@ -144,9 +164,9 @@ class MyStrategy(Strategy):
             self.sell(symbol=bar.symbol, quantity=100)
 ```
 
-## 5. 订单与交易详解 (Orders & Execution)
+## 6. 订单与交易详解 (Orders & Execution)
 
-### 5.1 订单生命周期
+### 6.1 订单生命周期
 
 在 AKQuant 中，订单状态流转如下：
 
@@ -158,7 +178,7 @@ class MyStrategy(Strategy):
 5.  **Cancelled**: 订单已取消。
 6.  **Rejected**: 订单被风控或交易所拒绝 (如资金不足、超出涨跌停)。
 
-### 5.2 常用交易指令
+### 6.2 常用交易指令
 
 *   **市价单 (Market Order)**:
     *   `self.buy(symbol, quantity)`
@@ -177,7 +197,7 @@ class MyStrategy(Strategy):
     *   `self.cancel_order(order_id)`: 撤销指定订单。
     *   `self.cancel_all_orders()`: 撤销当前所有未成交订单。
 
-### 5.3 市场规则与 T+1 (Market Rules)
+### 6.3 市场规则与 T+1 (Market Rules)
 
 在 A 股市场回测中，**T+1 交易规则**是一个非常重要的限制：**当天买入的股票，第二个交易日才能卖出**。
 
@@ -198,57 +218,47 @@ akquant.run_backtest(
 启用 T+1 后，你需要区分**总持仓**和**可用持仓**：
 
 *   **`self.get_position(symbol)`**: 返回总持仓（包含今日买入未解锁的部分）。
-*   `self.ctx.get_available_position(symbol)`: 返回**可用持仓**（即今日可卖出的数量）。
-    > 推荐使用便捷方法：`self.get_available_position(symbol)`
+*   **`self.ctx.get_available_position(symbol)`**: 返回**可用持仓**（即今日可卖出的数量）。
+    > 推荐使用 `Position` 辅助类：
+    > ```python
+    > pos = self.position  # 获取当前 symbol 的 Position 对象
+    > print(pos.size)      # 总持仓
+    > print(pos.available) # 可用持仓
+    > ```
 
 **示例代码**：
 
 ```python
 def on_bar(self, bar: Bar):
-    # 获取总持仓
-    total_pos = self.get_position(bar.symbol)
-
-    # 获取可用持仓 (T+1 模式下，今日买入的股票这里为 0)
-    avail_pos = self.get_available_position(bar.symbol)
+    # 使用 Position Helper
+    pos = self.position
 
     # 卖出逻辑：必须检查可用持仓
-    if signal_sell and avail_pos > 0:
-        self.sell(bar.symbol, avail_pos)
+    if signal_sell and pos.available > 0:
+        self.sell(bar.symbol, pos.available)
 ```
 
-> **注意**：如果你在 T+1 模式下尝试卖出超过 `available_position` 的数量，订单会被风控模块（Risk Manager）**拒绝 (Rejected)**，并提示 "Insufficient available position"。
+> **注意**：如果你在 T+1 模式下尝试卖出超过 `available` 的数量，订单会被风控模块（Risk Manager）**拒绝 (Rejected)**，并提示 "Insufficient available position"。
 
-### 5.4 账户与持仓查询
+### 6.4 账户与持仓查询
 
 除了 `get_position`，你还可以查询更多账户信息：
 
-*   **`self.equity`**: 当前账户总权益（现金 + 持仓市值）。
+*   **`self.ctx.cash`**: 当前账户可用资金。
+*   **`self.ctx.equity`**: 当前账户总权益（现金 + 持仓市值）。
 *   **`self.get_trades()`**: 获取历史所有已平仓交易记录（Closed Trades）。
 *   **`self.get_open_orders()`**: 获取当前未成交订单。
 
-## 6. 进阶功能
+## 7. 进阶功能
 
-### 6.1 事件回调
+### 7.1 事件回调
 
 除了 `on_bar`，你还可以重写其他回调函数来处理更精细的逻辑：
 
 *   `on_order(self, order)`: 订单状态更新时触发。
 *   `on_trade(self, trade)`: 订单成交时触发。
 
-### 6.2 定时器 (Timer)
-
-你可以注册定时器来在特定时间触发逻辑（例如每天收盘前 5 分钟平仓）：
-
-```python
-def on_start(self):
-    # 每天 14:55 触发
-    self.add_timer(time="14:55:00")
-
-def on_timer(self, timer):
-    print(f"Timer triggered at {timer.time}")
-```
-
-### 7.1 注册与使用
+### 7.2 指标 (Indicators)
 
 AKQuant 支持**自动发现**机制，你可以直接在 `__init__` 中将指标赋值给 `self` 属性，系统会自动完成注册。
 

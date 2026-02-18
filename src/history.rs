@@ -55,12 +55,9 @@ impl SymbolHistory {
                 self.extras.insert(k.clone(), dq);
             }
         }
-        let keys: Vec<String> = self.extras.keys().cloned().collect();
-        for k in keys {
-            let val = bar.extra.get(&k).cloned().unwrap_or(f64::NAN);
-            if let Some(dq) = self.extras.get_mut(&k) {
-                dq.push_back(val);
-            }
+        for (k, dq) in self.extras.iter_mut() {
+            let val = bar.extra.get(k).cloned().unwrap_or(f64::NAN);
+            dq.push_back(val);
         }
         self.timestamps.push_back(bar.timestamp);
         self.opens.push_back(bar.open.to_f64().unwrap_or(0.0));

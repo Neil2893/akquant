@@ -2,20 +2,20 @@
 
 ## 1. Basic Examples
 
-*   [Quick Start](quickstart.md): Complete workflow covering manual data backtesting and AKShare data backtesting.
-*   [Simple SMA Strategy](strategy_guide.md#class-based): Demonstrates how to write a strategy in class style and perform simple trading logic in `on_bar`.
+*   [Quick Start](../start/quickstart.md): Complete workflow covering manual data backtesting and AKShare data backtesting.
+*   [Simple SMA Strategy](strategy.md#class-based): Demonstrates how to write a strategy in class style and perform simple trading logic in `on_bar`.
 
 ## 2. Advanced Examples
 
 *   **Zipline Style Strategy**: Demonstrates how to write strategies using functional API (`initialize`, `on_bar`), suitable for users migrating from Zipline.
-    *   Refer to [Strategy Guide](strategy_guide.md#style-selection).
+    *   Refer to [Strategy Guide](strategy.md#style-selection).
 
 *   **Multi-Asset Backtest**:
-    *   **Futures Strategy**: Demonstrates futures backtest configuration (margin, multiplier). Refer to [Strategy Guide](strategy_guide.md#multi-asset).
-    *   **Option Strategy**: Demonstrates option backtest configuration (premium, per contract fee). Refer to [Strategy Guide](strategy_guide.md#multi-asset).
+    *   **Futures Strategy**: Demonstrates futures backtest configuration (margin, multiplier). Refer to [Strategy Guide](strategy.md#multi-asset).
+    *   **Option Strategy**: Demonstrates option backtest configuration (premium, per contract fee). Refer to [Strategy Guide](strategy.md#multi-asset).
 
 *   **Vectorized Indicators**:
-    *   Demonstrates how to use `IndicatorSet` to pre-calculate indicators to improve backtest speed. Refer to [Strategy Guide](strategy_guide.md#indicatorset).
+    *   Demonstrates how to use `IndicatorSet` to pre-calculate indicators to improve backtest speed. Refer to [Strategy Guide](strategy.md#indicatorset).
 
 ## 3. Common Strategies
 
@@ -329,6 +329,6 @@ def on_trade(self, trade):
     results = run_optimization(BracketStrategy, param_grid, data=df)
     ```
 
-Please refer to [examples/complex_orders.py](file:///examples/complex_orders.py) for the full code.
+Please refer to [examples/05_complex_orders.py](file:///examples/05_complex_orders.py) for the full code.
 
 > **Note**: Methods `buy` / `sell` / `stop_buy` / `stop_sell` all return a unique `order_id` (str). You can use this ID to precisely track the status of each order in `on_trade` and `on_order` callbacks.

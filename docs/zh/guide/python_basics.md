@@ -102,7 +102,61 @@ for p in prices:
 
 ---
 
-## 3. Pandas 速成：量化神器
+## 3. 函数 (Functions)：封装你的交易逻辑
+
+随着策略变复杂，你不想把同样的代码写十遍。这时候就需要**函数**。函数就像一个“加工厂”，扔进去原料（参数），产出结果（返回值）。
+
+### 定义函数
+```python
+def calculate_position_value(price, shares):
+    """
+    计算持仓市值
+    :param price: 当前价格
+    :param shares: 持股数量
+    :return: 市值
+    """
+    value = price * shares
+    return value
+
+# 使用函数
+apple_value = calculate_position_value(150.0, 100)
+tesla_value = calculate_position_value(200.0, 50)
+
+print(f"苹果持仓市值: {apple_value}")
+```
+
+### 为什么要用函数？
+1.  **复用代码**：写一次，到处用。
+2.  **清晰逻辑**：`check_signal()` 比一堆 `if` 语句更容易读懂。
+
+---
+
+## 4. 模块与包 (Modules)：引入外部工具
+
+Python 最强大的地方在于它有海量的**库**（Library）。你不需要自己造轮子，只需要 `import` 进来就能用。
+
+### 常用模块
+```python
+# 1. 导入标准库
+import math
+import datetime
+
+print(math.sqrt(16))  # 开根号 -> 4.0
+today = datetime.date.today()
+print(f"今天的日期: {today}")
+
+# 2. 导入第三方库 (如 AKQuant)
+# from akquant.strategy import Strategy
+# 这行代码的意思是：从 akquant 包里的 strategy 模块中，拿出一个叫 Strategy 的工具
+```
+
+在量化中，最常用的两个“外挂”是：
+*   **Pandas**：处理表格数据（Excel 的杀手）。
+*   **Numpy**：做复杂的数学运算。
+
+---
+
+## 5. Pandas 速成：量化神器
 
 在 AKQuant 中，99% 的数据（如 `history_data`）都是以 `DataFrame` 的形式存在的。你可以把它想象成一个**超级 Excel 表格**。
 
@@ -114,8 +168,8 @@ import pandas as pd
 
 # 模拟一个 OHLCV 表格
 data = {
-    "close": [10, 11, 12, 11, 13],
-    "volume": [100, 150, 200, 120, 300]
+    "close": [10, 11, 12, 11, 13, 14, 15],
+    "volume": [100, 150, 200, 120, 300, 310, 320]
 }
 df = pd.DataFrame(data)
 
@@ -123,17 +177,59 @@ df = pd.DataFrame(data)
 print(df["close"])
 
 # 2. 计算技术指标 (向量化运算，极快)
-# 计算收盘价的平均值
 ma_price = df["close"].mean()
+```
 
-# 3. 获取最新一行数据
-last_bar = df.iloc[-1]
-print(f"最新收盘价: {last_bar['close']}")
+### 进阶技巧：滑动窗口与筛选
+
+做策略时，我们经常要算“过去 N 天的均值”或者“找出涨幅超过 5% 的天数”。
+
+```python
+# 1. 滑动窗口 (Rolling Window)
+# 计算 5日移动平均线 (MA5)
+# rolling(5) 意思就是创建一个长度为5的窗口，从上往下滚
+df['ma5'] = df['close'].rolling(5).mean()
+print(df['ma5']) # 前4个会是 NaN (数据不足)，第5个开始有值
+
+# 2. 条件筛选 (Boolean Indexing)
+# 找出所有收盘价大于 12 的行
+high_prices = df[df['close'] > 12]
+print("高价日子：")
+print(high_prices)
+
+# 3. 处理缺失数据
+# 删掉包含 NaN (空值) 的行
+df_clean = df.dropna()
 ```
 
 ---
 
-## 4. 类与对象：读懂策略模板
+## 6. 异常处理 (Try/Except)：防御性编程
+
+在实盘交易中，什么都可能发生：断网、数据源报错、除数为零。为了防止策略直接**崩溃停止**，我们需要用到异常处理。
+
+```python
+price = 0 # 假设获取价格失败，返回了0
+
+try:
+    # 尝试执行这段代码
+    return_rate = (100 - price) / price
+    print(f"收益率: {return_rate}")
+except ZeroDivisionError:
+    # 如果发生了“除以零”错误，执行这里
+    print("错误：价格为0，无法计算收益率！")
+except Exception as e:
+    # 捕获其他所有错误
+    print(f"发生了未知错误: {e}")
+
+print("策略继续运行...") # 程序不会崩溃，这行依然会打印
+```
+
+**记住：** 在涉及网络请求或数学计算的关键步骤，加上 `try...except` 是个好习惯。
+
+---
+
+## 7. 类与对象：读懂策略模板
 
 在写策略时，你会看到 `class MyStrategy(Strategy):`。这是什么意思？
 
@@ -167,7 +263,7 @@ strategy.on_bar(9)          # 价格跌到9，触发买入
 
 ---
 
-## 5. 总结：AKQuant 常用语速查
+## 8. 总结：AKQuant 常用语速查
 
 在 AKQuant 写策略时，你最常用的就是下面这几句：
 
@@ -180,4 +276,4 @@ strategy.on_bar(9)          # 价格跌到9，触发买入
 | **查持仓** | `pos = self.get_position(bar.symbol)` | 我现在持有多少股？ |
 | **下单** | `self.buy(bar.symbol, 100)` | 买入 100 股 |
 
-掌握了这些，你就可以开始写出你的第一个量化策略了！去 [Quant Guide](quant_guide.md) 试试吧。
+掌握了这些，你就可以开始写出你的第一个量化策略了！去 [Quant Guide](quant_basics.md) 试试吧。

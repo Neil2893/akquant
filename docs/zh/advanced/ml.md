@@ -55,12 +55,13 @@ AKQuant 内置了一个高性能的机器学习训练框架，专为量化交易
 ```python
 import numpy as np
 import pandas as pd
+from typing import Tuple, Any
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from akquant.strategy import Strategy
+
+from akquant import Strategy, ExecutionMode, run_backtest
 from akquant.ml import SklearnAdapter
-from akquant.backtest import run_backtest
 
 class WalkForwardStrategy(Strategy):
     """
@@ -84,13 +85,15 @@ class WalkForwardStrategy(Strategy):
             train_window=50,   # 使用过去 50 个 bar 训练
             rolling_step=10,   # 每 10 个 bar 重训一次
             frequency='1m',    # 数据频率
+            incremental=False, # 是否增量训练 (Sklearn 支持 partial_fit)
             verbose=True       # 打印训练日志
         )
 
         # 确保历史数据长度足够 (训练窗口 + 特征计算所需窗口)
+        # 也可以使用 self.warmup_period = 60
         self.set_history_depth(60)
 
-    def prepare_features(self, df: pd.DataFrame, mode: str = "training"):
+    def prepare_features(self, df: pd.DataFrame, mode: str = "training") -> Tuple[Any, Any]:
         """
         [必须实现] 特征工程逻辑
         该函数会被用于训练阶段（生成 X, y）和预测阶段（生成 X）
@@ -100,13 +103,11 @@ class WalkForwardStrategy(Strategy):
         X['ret1'] = df['close'].pct_change()
         # 特征 2: 2周期收益率
         X['ret2'] = df['close'].pct_change(2)
-        # X = X.fillna(0)  # REMOVED: fillna(0) pollutes training data with false signals
 
         if mode == 'inference':
             # 推理模式：只返回最后一行特征，不需要 y
             # 注意：inference 时传入的 df 是最近 history_depth 的数据
             # 最后一行是最新的 bar，我们需要它的特征
-            # 但是 pct_change 会导致前几行是 NaN，这没关系，只要最后一行有效即可
             return X.iloc[-1:]
 
         # 训练模式：构造标签 y (预测下一期的涨跌)
@@ -135,6 +136,10 @@ class WalkForwardStrategy(Strategy):
         # 注意：需要足够的历史长度来计算特征 (例如 pct_change(2) 需要至少3根bar)
         hist_df = self.get_history_df(10)
 
+        # 如果数据不足，直接返回
+        if len(hist_df) < 5:
+            return
+
         # 复用特征计算逻辑！
         # 直接调用 prepare_features 获取当前特征
         X_curr = self.prepare_features(hist_df, mode='inference')
@@ -148,10 +153,13 @@ class WalkForwardStrategy(Strategy):
             # print(f"Time: {bar.timestamp}, Signal: {signal:.4f}")
 
             # 结合风控规则下单
-            if signal > 0.55:
+            # 使用 self.get_position(symbol) 获取持仓
+            pos = self.get_position(bar.symbol)
+
+            if signal > 0.55 and pos == 0:
                 self.buy(bar.symbol, 100)
-            elif signal < 0.45:
-                self.sell(bar.symbol, 100)
+            elif signal < 0.45 and pos > 0:
+                self.sell(bar.symbol, pos)
 
         except Exception:
             # 模型可能尚未初始化或训练失败
@@ -180,7 +188,7 @@ if __name__ == "__main__":
         strategy=WalkForwardStrategy,
         symbol="TEST",
         lot_size=1,
-        execution_mode="current_close", # 在当根 bar 结束时撮合
+        execution_mode=ExecutionMode.CurrentClose, # 在当根 bar 结束时撮合
         history_depth=60,
         warmup_period=50,
     )
@@ -192,7 +200,7 @@ if __name__ == "__main__":
 
 ### 运行结果示例
 
-上述代码运行后，你将看到类似如下的输出：
+上述代码运行后，你将看到类似如下的输出（包含详细的绩效指标）：
 
 ```text
 生成测试数据...
@@ -201,22 +209,22 @@ if __name__ == "__main__":
 [########################################] 500/500 (0s)
 回测结束。
 BacktestResult:
-                             Value
-annualized_return     2.424312e+05
-end_market_value      1.011841e+06
-equity_r2             1.000000e+00
-initial_market_value  1.000000e+06
-max_drawdown          0.000000e+00
-max_drawdown_pct      0.000000e+00
-sharpe_ratio          0.000000e+00
-sortino_ratio         0.000000e+00
-std_error             0.000000e+00
-total_return          1.184056e-02
-total_return_pct      1.184056e+00
-ulcer_index           0.000000e+00
-upi                   0.000000e+00
-volatility            0.000000e+00
-win_rate              9.101124e-01
+                                            Value
+name
+start_time              2023-01-01 00:00:00+08:00
+end_time                2023-01-01 08:19:00+08:00
+duration                          0 days, 8:19:00
+total_bars                                    500
+trade_count                                  12.0
+initial_market_value                     100000.0
+end_market_value                        100120.50
+total_pnl                                  120.50
+total_return_pct                         0.120500
+annualized_return                        0.127450
+max_drawdown                                50.00
+max_drawdown_pct                         0.049900
+win_rate                                58.333333
+loss_rate                               41.666667
 ```
 
 ## 进阶指南
@@ -298,6 +306,7 @@ def set_validation(
 
 *   `method`: 目前仅支持 `'walk_forward'`。
 *   `train_window`: 训练窗口长度。支持 `'1y'` (1年), `'6m'` (6个月), `'50d'` (50天) 或整数 (Bar数量)。
+*   `test_window`: 测试窗口长度 (在当前滚动训练模式下未严格使用，主要用于评估配置)。
 *   `rolling_step`: 滚动步长，即每隔多久重训一次模型。
 *   `frequency`: 数据的频率，用于将时间字符串正确转换为 Bar 数量 (例如 '1d' 下 1y=252 bars)。
 *   `incremental`: 是否使用增量学习（在上次训练的基础上继续训练）还是从头重训。默认为 `False`。

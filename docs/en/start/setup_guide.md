@@ -160,4 +160,4 @@ python verify.py
 ```
 
 If you see the success message, your arsenal is ready!
-Next, go to [Python for Finance](py_guide.md) to learn syntax, or jump to [Quant Guide](quant_guide.md) to start coding strategies.
+Next, go to [Python for Finance](../guide/python_basics.md) to learn syntax, or jump to [Quant Guide](../guide/quant_basics.md) to start coding strategies.

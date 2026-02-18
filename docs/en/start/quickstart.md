@@ -235,7 +235,7 @@ You can view detailed trade metrics via `print(result.trades_df)`.
 
 Too simple? Want to learn how to write real quantitative strategies (like Dual Moving Average, MACD, etc.)?
 
-👉 **Please read [Tutorial: Writing Your First Strategy](tutorial.md)**
+👉 **Please read [Tutorial: Writing Your First Strategy](first_strategy.md)**
 
 This tutorial will cover:
 

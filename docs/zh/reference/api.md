@@ -38,8 +38,8 @@ def run_backtest(
 
 **关键参数:**
 
-*   `data`: 回测数据。支持单个 DataFrame，或 `{symbol: DataFrame}` 字典。
-*   `strategy`: 策略类或实例。也支持传入 `on_bar` 函数（函数式编程风格）。
+*   `data`: 回测数据。支持单个 DataFrame，`{symbol: DataFrame}` 字典，或 `List[Bar]`。
+*   `strategy`: 策略类、策略实例，或 `on_bar` 函数（函数式编程风格）。
 *   `symbol`: 标的代码或代码列表。
 *   `initial_cash`: 初始资金 (默认 1,000,000.0)。
 *   `execution_mode`: 执行模式。
@@ -50,7 +50,8 @@ def run_backtest(
 *   `start_time` / `end_time`: 回测开始/结束时间。
 *   `config`: `BacktestConfig` 配置对象，用于集中管理配置。
 *   `instruments_config`: 标的配置。用于设置期货/期权等非股票资产的参数（如乘数、保证金）。
-    *   接收 `List[InstrumentConfig]` 或 `{symbol: InstrumentConfig}`。
+*   `lot_size`: 最小交易单位。如果是 `int`，应用于所有标的；如果是字典，按标的匹配。
+*   `custom_matchers`: 自定义撮合器字典。
 
 ### `akquant.BacktestConfig`
 
@@ -78,11 +79,26 @@ class BacktestConfig:
 @dataclass
 class StrategyConfig:
     initial_cash: float = 100000.0
+
+    # 费率
     commission_rate: float = 0.0
     stamp_tax_rate: float = 0.0
     transfer_fee_rate: float = 0.0
     min_commission: float = 0.0
+
+    # 执行
     enable_fractional_shares: bool = False
+    round_fill_price: bool = True       # 是否对成交价进行最小变动价位取整
+    exit_on_last_bar: bool = True       # 是否在回测结束时自动平仓
+
+    # 持仓限制
+    max_long_positions: Optional[int] = None
+    max_short_positions: Optional[int] = None
+
+    # 统计
+    bootstrap_samples: int = 1000       # Bootstrap 采样次数
+
+    # 风控
     risk: Optional[RiskConfig] = None
 ```
 
@@ -116,6 +132,8 @@ class InstrumentConfig:
 *   `on_start()`: 策略启动时触发。用于订阅 (`subscribe`) 和注册指标。
 *   `on_bar(bar: Bar)`: K 线闭合时触发。
 *   `on_tick(tick: Tick)`: Tick 到达时触发。
+*   `on_order(order: Order)`: 订单状态更新时触发（如成交、取消、拒绝）。
+*   `on_trade(trade: Trade)`: 订单成交时触发。
 *   `on_timer(payload: str)`: 定时器触发。
 *   `on_stop()`: 策略停止时触发。
 *   `on_train_signal(context)`: 滚动训练信号触发 (ML 模式)。
@@ -124,36 +142,39 @@ class InstrumentConfig:
 
 *   `self.symbol`: 当前正在处理的标的代码。
 *   `self.close`, `self.open`, `self.high`, `self.low`, `self.volume`: 当前 Bar/Tick 的价格和成交量。
-*   `self.position`: 当前标的持仓对象 (`Position`)，包含 `size` 和 `available` 属性。
+*   `self.position`: 当前标的持仓辅助对象 (`Position`)，包含 `size` 和 `available` 属性。
 *   `self.now`: 当前回测时间 (`pd.Timestamp`)。
+*   `self.ctx`: 策略上下文 (`StrategyContext`)，提供底层 API 访问。
 
 **交易方法:**
 
-*   `buy(symbol, quantity, price=None, ...)`: 买入。不指定 `price` 则为市价单。
-*   `sell(symbol, quantity, price=None, ...)`: 卖出。
-*   `short(symbol, quantity, price=None, ...)`: 卖空。
-*   `cover(symbol, quantity, price=None, ...)`: 平空。
-*   `stop_buy(symbol, trigger_price, quantity, ...)`: 止损买入 (Stop Market)。当价格突破 `trigger_price` 时触发市价买单。
-*   `stop_sell(symbol, trigger_price, quantity, ...)`: 止损卖出 (Stop Market)。当价格跌破 `trigger_price` 时触发市价卖单。
-*   `order_target_value(target_value, symbol, price=None)`: 调整至目标持仓市值。
-*   `order_target_percent(target_percent, symbol, price=None)`: 调整至目标账户占比。
-*   `close_position(symbol)`: 平仓指定标的。
+*   `buy(symbol, quantity, price=None, trigger_price=None, ...)`: 买入（开多/平空）。
+    *   如果不指定 `price`，则为市价单。
+    *   如果指定 `price`，则为限价单。
+    *   如果指定 `trigger_price`，则为止损/止盈单 (Stop Market)。
+*   `sell(symbol, quantity, price=None, trigger_price=None, ...)`: 卖出（平多/开空）。参数同上。
 *   `cancel_order(order_id: str)`: 撤销指定订单。
 *   `cancel_all_orders(symbol)`: 取消指定标的的所有挂单。如果不指定 `symbol`，则取消所有挂单。
 
 **数据与工具:**
 
-*   `get_history(count, symbol, field="close") -> np.ndarray`: 获取历史数据数组 (Zero-Copy)。支持 `open/high/low/close/volume` 以及任何数值型扩展字段（例如 `adj_close`, `adj_factor`）。
+*   `get_history(count, symbol, field="close") -> np.ndarray`: 获取历史数据数组 (Zero-Copy)。
 *   `get_history_df(count, symbol) -> pd.DataFrame`: 获取历史数据 DataFrame (OHLCV)。
 *   `get_position(symbol) -> float`: 获取当前持仓量。
+*   `get_available_position(symbol) -> float`: 获取可用持仓量。
+*   `get_positions() -> Dict[str, float]`: 获取所有标的持仓。
+*   `hold_bar(symbol) -> int`: 获取当前持仓持有的 Bar 数量。
 *   `get_cash() -> float`: 获取当前可用资金。
-*   `get_account() -> Dict[str, float]`: 获取账户详情快照。包含 `cash` (可用资金), `equity` (总权益), `market_value` (持仓市值), 以及 `frozen_cash` 和 `margin` (预留字段，暂为0)。
+*   `get_account() -> Dict[str, float]`: 获取账户详情快照 (`cash`, `equity`, `market_value`)。
 *   `get_order(order_id) -> Order`: 获取指定订单详情。
 *   `get_open_orders(symbol) -> List[Order]`: 获取当前未完成订单列表。
-*   `subscribe(instrument_id: str)`: 订阅行情。对于多标的回测或实盘，必须显式订阅才能接收 `on_tick`/`on_bar` 回调。
+*   `get_trades() -> List[ClosedTrade]`: 获取所有已平仓交易记录。
+*   `subscribe(instrument_id: str)`: 订阅行情。
 *   `log(msg: str, level: int)`: 输出带时间戳的日志。
 *   `schedule(trigger_time, payload)`: 注册单次定时任务。
 *   `add_daily_timer(time_str, payload)`: 注册每日定时任务。
+*   `to_local_time(timestamp) -> pd.Timestamp`: 将 UTC 时间戳转换为本地时间。
+*   `format_time(timestamp, fmt) -> str`: 格式化时间戳。
 
 **机器学习支持:**
 
@@ -167,6 +188,17 @@ K 线数据对象。
 
 *   `timestamp`: Unix 时间戳 (纳秒)。
 *   `open`, `high`, `low`, `close`, `volume`: OHLCV 数据。
+*   `symbol`: 标的代码。
+*   `extra`: 扩展数据字典 (`Dict[str, float]`)。
+*   `timestamp_str`: 时间字符串。
+
+### `akquant.Tick`
+
+Tick 数据对象。
+
+*   `timestamp`: Unix 时间戳 (纳秒)。
+*   `price`: 最新价。
+*   `volume`: 成交量。
 *   `symbol`: 标的代码。
 
 ## 3. 核心引擎 (Core)
@@ -185,8 +217,15 @@ K 线数据对象。
 **市场与费率配置:**
 
 *   `use_simple_market()`: 启用简单市场。
-*   `use_china_market()`: 启用中国市场。
-*   `set_stock_fee_rules(commission, stamp_tax, transfer_fee, min_commission)`: 设置费率。
+*   `use_china_market()`: 启用中国市场 (股票)。
+*   `use_china_futures_market()`: 启用中国期货市场。
+*   `set_stock_fee_rules(commission, stamp_tax, transfer_fee, min_commission)`: 设置股票费率。
+*   `set_future_fee_rules(commission_rate)`: 设置期货费率。
+*   `set_fund_fee_rules(...)`: 设置基金费率。
+*   `set_option_fee_rules(...)`: 设置期权费率。
+*   `set_slippage(type, value)`: 设置滑点 (Fixed 或 Percent)。
+*   `set_volume_limit(limit)`: 设置成交量限制 (如 0.1 表示不超过 Bar 成交量的 10%)。
+*   `set_market_sessions(sessions)`: 设置交易时段。
 
 ## 4. 交易对象 (Trading Objects)
 
@@ -195,27 +234,41 @@ K 线数据对象。
 *   `id`: 订单 ID。
 *   `symbol`: 标的代码。
 *   `side`: `OrderSide.Buy` / `OrderSide.Sell`。
-*   `order_type`: `OrderType.Market` / `OrderType.Limit` 等。
+*   `order_type`: `OrderType.Market` / `OrderType.Limit` / `StopMarket` 等。
 *   `status`: `OrderStatus.New` / `Filled` / `Cancelled` 等。
 *   `quantity` / `filled_quantity`: 委托/成交数量。
+*   `price`: 委托价格。
 *   `average_filled_price`: 成交均价。
+*   `trigger_price`: 触发价格。
+*   `time_in_force`: 有效期 (`GTC`, `IOC`, `FOK`, `Day`)。
+*   `created_at` / `updated_at`: 时间戳。
+*   `tag`: 标签。
+*   `reject_reason`: 拒绝原因。
 
-### `akquant.Instrument`
+### `akquant.Trade`
 
-合约定义。
+单次成交记录（一个订单可能对应多次成交）。
 
-```python
-Instrument(
-    symbol="AAPL",
-    asset_type=AssetType.Stock,
-    multiplier=1.0,
-    margin_ratio=1.0,
-    tick_size=0.01,
-    option_type=None,
-    strike_price=None,
-    expiry_date=None
-)
-```
+*   `id`: 成交 ID。
+*   `order_id`: 对应订单 ID。
+*   `symbol`: 标的代码。
+*   `side`: 方向。
+*   `quantity`: 成交数量。
+*   `price`: 成交价格。
+*   `commission`: 手续费。
+*   `timestamp`: 成交时间。
+
+### `akquant.ClosedTrade`
+
+已平仓交易记录（开仓+平仓的完整周期）。
+
+*   `entry_time` / `exit_time`: 开/平仓时间。
+*   `entry_price` / `exit_price`: 开/平仓价格。
+*   `quantity`: 数量。
+*   `pnl`: 盈亏金额。
+*   `return_pct`: 收益率。
+*   `duration`: 持仓时间。
+*   `mae` / `mfe`: 最大不利/有利变动。
 
 ## 5. 投资组合与风控 (Portfolio & Risk)
 
@@ -242,9 +295,11 @@ class RiskConfig:
 
 **属性:**
 
-*   `metrics_df`: 绩效指标表格。
-*   `trades_df`: 交易记录表格。
-*   `orders_df`: 委托记录表格。
+*   `metrics_df`: 绩效指标表格 (Sharpe, Drawdown 等)。
+*   `trades_df`: 所有平仓交易记录表格。
+*   `orders_df`: 所有委托记录表格。
 *   `positions_df`: 每日持仓详情。
-*   `equity_curve`: 权益曲线。
-*   `cash_curve`: 现金曲线。
+*   `equity_curve`: 权益曲线 (List[Tuple[timestamp, value]])。
+*   `trades`: `ClosedTrade` 对象列表。
+*   `executions`: `Trade` 对象列表 (所有成交流水)。
+*   `snapshots`: 每日 `PositionSnapshot` 列表。
