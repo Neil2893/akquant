@@ -190,8 +190,9 @@ class MyStrategy(Strategy):
     *   只有当市场价格 <= 10.5 时才买入。
 
 *   **目标仓位 (Target Order)**:
-    *   `self.order_target_percent(target=0.5, symbol="AAPL")`: 调整持仓至总资产的 50%。
-    *   `self.order_target_value(target=10000, symbol="AAPL")`: 调整持仓至 10000 元市值。
+    *   `self.order_target(target=100, symbol="AAPL")`: 调整持仓数量至 100 股。
+    *   `self.order_target_percent(target_percent=0.5, symbol="AAPL")`: 调整持仓至总资产的 50%。
+    *   `self.order_target_value(target_value=10000, symbol="AAPL")`: 调整持仓至 10000 元市值。
 
 *   **撤单 (Cancel Order)**:
     *   `self.cancel_order(order_id)`: 撤销指定订单。

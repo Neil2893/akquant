@@ -269,7 +269,7 @@ strategy.on_bar(9)          # 价格跌到9，触发买入
 
 | 场景 | Python 代码 | 含义 |
 | :--- | :--- | :--- |
-| **获取数据** | `hist = self.history_data(n=20)` | 拿过去20根K线数据 (DataFrame) |
+| **获取数据** | `hist = self.get_history_df(count=20)` | 拿过去20根K线数据 (DataFrame) |
 | **计算均线** | `ma = hist['close'].mean()` | 计算收盘价平均值 |
 | **取最新价** | `current_price = bar.close` | 获取当前K线的收盘价 |
 | **判断信号** | `if ma_short > ma_long:` | 如果短期均线大于长期均线 |
