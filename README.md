@@ -87,9 +87,9 @@ print(result)
 **运行结果示例:**
 
 ```text
+=== Backtest Result ===
 BacktestResult:
                                             Value
-name
 start_time              2025-02-12 00:00:00+08:00
 end_time                2026-02-12 00:00:00+08:00
 duration                        365 days, 0:00:00
@@ -143,6 +143,8 @@ cvar_95                                 -0.000405
 cvar_99                                  -0.00069
 sqn                                     -0.743693
 kelly_criterion                         -0.080763
+max_leverage                              0.01458
+min_margin_level                        68.587671
 ```
 
 ## 可视化 (Visualization)
@@ -151,11 +153,7 @@ AKQuant 内置了基于 **Plotly** 的强大可视化模块，仅需一行代码
 
 ```python
 # 生成交互式 HTML 报告，自动在浏览器中打开
-result.report(title="我的策略报告", show=True)
-
-# 或者单独绘制仪表盘
-import akquant.plot as aqp
-aqp.plot_dashboard(result)
+result.report(show=True)
 ```
 
 <p align="center">

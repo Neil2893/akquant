@@ -5,6 +5,8 @@
 *   [快速开始 (Quickstart)](../start/quickstart.md): 包含手动数据回测和 AKShare 数据回测的完整流程。
 *   [简单的均线策略 (SMA Strategy)](strategy.md#class-based): 展示了如何使用类风格编写策略，并在 `on_bar` 中进行简单的交易逻辑。
 
+> 数据源约定：除特别标注需要模拟数据外，本页示例默认使用 AKShare 获取真实市场数据。
+
 ## 2. 进阶示例 (Advanced Examples)
 
 *   **Zipline 风格策略**: 展示了如何使用函数式 API (`initialize`, `on_bar`) 编写策略，适合从 Zipline 迁移的用户。
@@ -16,6 +18,27 @@
 
 *   **向量化指标 (Vectorized Indicators)**:
     *   展示如何使用 `IndicatorSet` 预计算指标以提高回测速度。参考 [策略指南](strategy.md#indicatorset)。
+
+### 使用 AKShare 获取 A 股日线数据 (stock_zh_a_daily)
+
+```python
+import akshare as ak
+import pandas as pd
+from akquant import run_backtest
+
+df = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df.columns:
+    df = df.reset_index().rename(columns={"index": "date"})
+df.columns = [c.lower() for c in df.columns]
+if "time" in df.columns and "date" not in df.columns:
+    df = df.rename(columns={"time": "date"})
+df["date"] = pd.to_datetime(df["date"]).dt.tz_localize("Asia/Shanghai")
+df["symbol"] = "000001"
+cols = ["date", "open", "high", "low", "close", "volume", "symbol"]
+df = df[cols].sort_values("date").reset_index(drop=True)
+
+# result = run_backtest(data=df, strategy=DualSMAStrategy, lot_size=100)
+```
 
 ## 3. 常用策略示例 (Common Strategies)
 
@@ -46,6 +69,44 @@ class AdjSignal(Strategy):
             self.close_position(bar.symbol)
 ```
 
+运行该示例（AKShare 数据）：
+
+```python
+import akshare as ak
+import pandas as pd
+from akquant import run_backtest
+
+# 未复权收盘价 (用于撮合/估值)
+df_raw = ak.stock_zh_a_daily(symbol="sz000001")
+if "date" not in df_raw.columns:
+    df_raw = df_raw.reset_index().rename(columns={"index": "date"})
+df_raw.columns = [c.lower() for c in df_raw.columns]
+if "time" in df_raw.columns and "date" not in df_raw.columns:
+    df_raw = df_raw.rename(columns={"time": "date"})
+df_raw["date"] = pd.to_datetime(df_raw["date"]).dt.tz_localize("Asia/Shanghai")
+df_raw["symbol"] = "000001"
+df_raw = df_raw[["date", "open", "high", "low", "close", "volume", "symbol"]]
+
+# 前复权收盘价 (用于信号): 作为 adj_close 列
+df_adj = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df_adj.columns:
+    df_adj = df_adj.reset_index().rename(columns={"index": "date"})
+df_adj.columns = [c.lower() for c in df_adj.columns]
+if "time" in df_adj.columns and "date" not in df_adj.columns:
+    df_adj = df_adj.rename(columns={"time": "date"})
+df_adj["date"] = pd.to_datetime(df_adj["date"]).dt.tz_localize("Asia/Shanghai")
+df_adj = df_adj[["date", "close"]].rename(columns={"close": "adj_close"})
+
+# 合并两者，既有真实收盘 close，又有后复权 adj_close
+df = pd.merge(df_raw, df_adj, on="date", how="inner").sort_values("date").reset_index(drop=True)
+
+result = run_backtest(
+    data=df,
+    strategy=AdjSignal,
+    lot_size=100
+)
+```
+
 ### 3.1 双均线策略 (Dual Moving Average)
 
 **核心思想**：
@@ -64,33 +125,43 @@ import akquant as aq
 
 class DualSMAStrategy(aq.Strategy):
     def __init__(self, short_window=5, long_window=20):
-        # 初始化两个指标：短期 SMA 和 长期 SMA
-        # 使用 Rust 实现的高性能增量 SMA 指标
         self.sma_short = aq.SMA(short_window)
         self.sma_long = aq.SMA(long_window)
 
     def on_bar(self, bar: aq.Bar):
-        # 1. 更新指标状态
-        # update 方法接受当前收盘价，并返回最新的均线值
         short_val = self.sma_short.update(bar.close)
         long_val = self.sma_long.update(bar.close)
 
-        # 2. 如果指标数据不足（例如刚开始几天无法计算 20 日均线），则跳过
         if short_val is None or long_val is None:
             return
 
-        # 获取当前持仓数量
         position = self.get_position(bar.symbol)
 
-        # 3. 生成交易信号
-
-        # 金叉 (短均线上穿长均线) -> 且当前无持仓 -> 买入
         if short_val > long_val and position == 0:
             self.buy(bar.symbol, 100)
 
-        # 死叉 (短均线下穿长均线) -> 且当前持有头寸 -> 卖出平仓
         elif short_val < long_val and position > 0:
             self.sell(bar.symbol, 100)
+```
+
+运行该策略（AKShare 数据）：
+
+```python
+import akshare as ak
+import pandas as pd
+from akquant import run_backtest
+
+df = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df.columns:
+    df = df.reset_index().rename(columns={"index": "date"})
+df.columns = [c.lower() for c in df.columns]
+if "time" in df.columns and "date" not in df.columns:
+    df = df.rename(columns={"time": "date"})
+df["date"] = pd.to_datetime(df["date"]).dt.tz_localize("Asia/Shanghai")
+df["symbol"] = "000001"
+df = df[["date", "open", "high", "low", "close", "volume", "symbol"]].sort_values("date")
+
+result = run_backtest(data=df, strategy=DualSMAStrategy, lot_size=100)
 ```
 
 ### 3.2 RSI 均值回归策略 (RSI Mean Reversion)
@@ -113,46 +184,54 @@ class RSIStrategy(aq.Strategy):
         self.period = period
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
-        # 重要：设置历史数据回溯深度
-        # 因为计算 RSI 需要过去 N 天的数据，必须预留足够的历史窗口
         self.set_history_depth(period + 20)
 
     def calculate_rsi(self, prices: pd.Series) -> pd.Series:
-        """使用 pandas 计算 RSI 指标"""
         delta = prices.diff()
-        # 简单的 RSI 算法实现
         gain = (delta.where(delta > 0, 0)).rolling(window=self.period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=self.period).mean()
         rs = gain / loss
         return 100 - (100 / (1 + rs))
 
     def on_bar(self, bar: aq.Bar):
-        # 1. 获取历史收盘价 DataFrame
-        # get_history_df 会返回过去 N 根 Bar 的数据
         history = self.get_history_df(self.period + 20, bar.symbol)
 
-        # 数据不足时返回
         if len(history) < self.period + 1:
             return
 
-        # 2. 计算 RSI
         rsi_series = self.calculate_rsi(history['close'])
-        current_rsi = rsi_series.iloc[-1] # 取最新的 RSI 值
+        current_rsi = rsi_series.iloc[-1]
 
         if np.isnan(current_rsi):
             return
 
         position = self.get_position(bar.symbol)
 
-        # 3. 交易逻辑
-
-        # RSI < 30 (超卖) -> 预期反弹 -> 买入
         if current_rsi < self.buy_threshold and position == 0:
             self.buy(bar.symbol, 100)
 
-        # RSI > 70 (超买) -> 预期下跌 -> 卖出
         elif current_rsi > self.sell_threshold and position > 0:
             self.sell(bar.symbol, 100)
+```
+
+运行该策略（AKShare 数据）：
+
+```python
+import akshare as ak
+import pandas as pd
+from akquant import run_backtest
+
+df = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df.columns:
+    df = df.reset_index().rename(columns={"index": "date"})
+df.columns = [c.lower() for c in df.columns]
+if "time" in df.columns and "date" not in df.columns:
+    df = df.rename(columns={"time": "date"})
+df["date"] = pd.to_datetime(df["date"]).dt.tz_localize("Asia/Shanghai")
+df["symbol"] = "000001"
+df = df[["date", "open", "high", "low", "close", "volume", "symbol"]].sort_values("date")
+
+result = run_backtest(data=df, strategy=RSIStrategy, lot_size=100)
 ```
 
 ### 3.3 布林带策略 (Bollinger Bands)
@@ -175,34 +254,47 @@ class BollingerStrategy(aq.Strategy):
     def __init__(self, window=20, num_std=2):
         self.window = window
         self.num_std = num_std
-        # 设置历史数据回溯深度，确保有足够数据计算均值和标准差
         self.set_history_depth(window + 5)
 
     def on_bar(self, bar: aq.Bar):
-        # 1. 获取历史数据
         history = self.get_history_df(self.window, bar.symbol)
         if len(history) < self.window:
             return
 
-        # 2. 计算布林带
         close_prices = history['close']
-        ma = close_prices.mean()          # 中轨 (均值)
-        std = close_prices.std()          # 标准差
-        upper_band = ma + self.num_std * std # 上轨
-        lower_band = ma - self.num_std * std # 下轨
+        ma = close_prices.mean()
+        std = close_prices.std()
+        upper_band = ma + self.num_std * std
+        lower_band = ma - self.num_std * std
 
         position = self.get_position(bar.symbol)
         current_price = bar.close
 
-        # 3. 交易逻辑
-
-        # 价格跌破下轨 -> 视为超卖反转信号 -> 买入
         if current_price < lower_band and position == 0:
             self.buy(bar.symbol, 100)
 
-        # 价格突破上轨 -> 视为超买反转信号 -> 卖出
         elif current_price > upper_band and position > 0:
             self.sell(bar.symbol, 100)
+```
+
+运行该策略（AKShare 数据）：
+
+```python
+import akshare as ak
+import pandas as pd
+from akquant import run_backtest
+
+df = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df.columns:
+    df = df.reset_index().rename(columns={"index": "date"})
+df.columns = [c.lower() for c in df.columns]
+if "time" in df.columns and "date" not in df.columns:
+    df = df.rename(columns={"time": "date"})
+df["date"] = pd.to_datetime(df["date"]).dt.tz_localize("Asia/Shanghai")
+df["symbol"] = "000001"
+df = df[["date", "open", "high", "low", "close", "volume", "symbol"]].sort_values("date")
+
+result = run_backtest(data=df, strategy=BollingerStrategy, lot_size=100)
 ```
 
 ### 3.4 混合资产回测 (Mixed Asset Backtest) {: #mixed-asset }
@@ -212,7 +304,7 @@ class BollingerStrategy(aq.Strategy):
 *   **股票**：通常 1 手 = 100 股，全额交易。
 *   **期货**：有**合约乘数**（如 1 点 = 300 元）和**保证金比例**（如 10% 资金即可买入合约）。
 
-本示例展示了如何使用 `InstrumentConfig` 来配置期货的特殊属性，并在同一个策略中混合交易股票和期货。
+本示例展示了如何使用 `InstrumentConfig` 来配置期货的特殊属性，并在同一个策略中混合交易股票和期货（此示例为演示期货参数，保留模拟数据）。
 
 ```python
 import akquant as aq
@@ -264,6 +356,26 @@ run_backtest(
     strategy=TestStrategy,
     instruments_config=[future_config]
 )
+```
+
+可选：使用 AKShare 替换股票数据
+
+```python
+import akshare as ak
+import pandas as pd
+
+df_stock = ak.stock_zh_a_daily(symbol="sz000001", adjust="qfq")
+if "date" not in df_stock.columns:
+    df_stock = df_stock.reset_index().rename(columns={"index": "date"})
+df_stock.columns = [c.lower() for c in df_stock.columns]
+if "time" in df_stock.columns and "date" not in df_stock.columns:
+    df_stock = df_stock.rename(columns={"time": "date"})
+df_stock["date"] = pd.to_datetime(df_stock["date"]).dt.tz_localize("Asia/Shanghai")
+df_stock["symbol"] = "000001"
+df_stock = df_stock[["date", "open", "high", "low", "close", "volume", "symbol"]]
+
+# 与模拟的期货数据组合
+data = {"000001": df_stock, "FUTURE_B": df_future}
 ```
 
 ## 4. 复杂订单与风控 (Complex Orders) {: #complex-orders }
