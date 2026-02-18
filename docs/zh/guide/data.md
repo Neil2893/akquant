@@ -159,8 +159,8 @@ data_map = {
 
 在策略中，你可以随时获取过去 N 天的行情数据。
 
-*   `self.get_history(n, symbol, field)`: 返回 `numpy.ndarray`，性能极高（零拷贝）。
-*   `self.get_history_df(n, symbol)`: 返回 `pd.DataFrame`，方便使用 Pandas 计算。
+*   `self.get_history(count, symbol, field)`: 返回 `numpy.ndarray`，性能极高（零拷贝）。
+*   `self.get_history_df(count, symbol)`: 返回 `pd.DataFrame`，方便使用 Pandas 计算。
 
 **注意**：`get_history` 获取的是**当前时刻之前**的数据，不包含当前 Bar（为了避免未来函数）。如果需要包含当前 Bar 的数据参与计算，可以手动 append。
 
