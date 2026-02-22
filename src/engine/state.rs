@@ -14,10 +14,10 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn new(initial_capital: Decimal) -> Self {
+    pub fn new(initial_cash: Decimal) -> Self {
         Self {
             portfolio: Portfolio {
-                cash: initial_capital,
+                cash: initial_cash,
                 positions: Arc::new(HashMap::new()),
                 available_positions: Arc::new(HashMap::new()),
             },

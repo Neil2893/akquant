@@ -52,7 +52,7 @@ pub struct Engine {
     pub risk_manager: RiskManager,
     pub(crate) timezone_offset: i32,
     pub(crate) history_buffer: Arc<RwLock<HistoryBuffer>>,
-    pub(crate) initial_capital: Decimal,
+    pub(crate) initial_cash: Decimal,
     // Components
     pub(crate) event_manager: EventManager,
     pub(crate) statistics_manager: StatisticsManager,
