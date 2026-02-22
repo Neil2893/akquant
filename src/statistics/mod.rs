@@ -119,7 +119,7 @@ impl StatisticsManager {
         instruments: &HashMap<String, Instrument>,
         last_prices: &HashMap<String, Decimal>,
         order_manager: &crate::order_manager::OrderManager,
-        initial_capital: Decimal,
+        initial_cash: Decimal,
         now_ns: Option<i64>,
     ) -> BacktestResult {
         // Calculate final PnL
@@ -162,7 +162,7 @@ impl StatisticsManager {
             snapshots,
             trade_pnl,
             order_manager.trade_tracker.closed_trades.to_vec(),
-            initial_capital,
+            initial_cash,
             order_manager.get_all_orders(),
             order_manager.trades.clone(),
         )

@@ -73,9 +73,9 @@ impl Engine {
     /// :return: Engine 实例
     #[new]
     pub fn new() -> Self {
-        let initial_capital = Decimal::from(100_000);
+        let initial_cash = Decimal::from(100_000);
         Engine {
-            state: SharedState::new(initial_capital),
+            state: SharedState::new(initial_cash),
             last_prices: HashMap::new(),
             instruments: HashMap::new(),
             current_date: None,
@@ -88,7 +88,7 @@ impl Engine {
             risk_manager: RiskManager::new(),
             timezone_offset: 28800, // Default UTC+8
             history_buffer: Arc::new(RwLock::new(HistoryBuffer::new(10000))), // Default large capacity for MAE/MFE
-            initial_capital,
+            initial_cash,
             event_manager: EventManager::new(),
             statistics_manager: StatisticsManager::new(),
             settlement_manager: SettlementManager::new(),
@@ -307,7 +307,7 @@ impl Engine {
     pub fn set_cash(&mut self, cash: f64) {
         let val = Decimal::from_f64(cash).unwrap_or(Decimal::ZERO);
         self.state.portfolio.cash = val;
-        self.initial_capital = val;
+        self.initial_cash = val;
     }
 
     /// 添加数据源
@@ -439,7 +439,7 @@ impl Engine {
             &self.instruments,
             &self.last_prices,
             &self.state.order_manager,
-            self.initial_capital,
+            self.initial_cash,
             self.clock.timestamp(),
         )
     }

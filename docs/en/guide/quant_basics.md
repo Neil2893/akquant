@@ -180,7 +180,7 @@ if __name__ == "__main__":
     result = run_backtest(
         strategy_class=DualMovingAverageStrategy,
         data=df,
-        initial_capital=10000.0 # Initial capital 10k
+        initial_cash=10000.0 # Initial capital 10k
     )
 
     # Print summary
@@ -213,7 +213,7 @@ df['symbol'] = "AAPL" # Add symbol column
 result = run_backtest(
     strategy_class=DualMovingAverageStrategy,
     data=df,
-    initial_capital=10000.0
+    initial_cash=10000.0
 )
 ```
 

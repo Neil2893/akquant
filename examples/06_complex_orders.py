@@ -157,7 +157,7 @@ def run_example() -> None:
     # 2. 运行回测
     print("开始 Bracket Order 策略回测...")
     run_backtest(
-        data={"TEST_STOCK": df}, strategy=BracketStrategy, initial_capital=100000.0
+        data={"TEST_STOCK": df}, strategy=BracketStrategy, initial_cash=100000.0
     )
 
 

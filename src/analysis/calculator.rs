@@ -12,7 +12,7 @@ impl BacktestResult {
         snapshots: Vec<(i64, Vec<PositionSnapshot>)>,
         trade_pnl: TradePnL,
         trades: Vec<ClosedTrade>,
-        initial_capital: Decimal,
+        initial_cash: Decimal,
         orders: Vec<Order>,
         executions: Vec<Trade>,
     ) -> Self {
@@ -45,8 +45,8 @@ impl BacktestResult {
                     equity_r2: 0.0,
                     std_error: 0.0,
                     win_rate: 0.0,
-                    initial_market_value: initial_capital.to_f64().unwrap_or_default(),
-                    end_market_value: initial_capital.to_f64().unwrap_or_default(),
+                    initial_market_value: initial_cash.to_f64().unwrap_or_default(),
+                    end_market_value: initial_cash.to_f64().unwrap_or_default(),
                     total_return_pct: 0.0,
                     start_time: 0,
                     end_time: 0,
@@ -66,7 +66,7 @@ impl BacktestResult {
             };
         }
 
-        let initial_equity = initial_capital;
+        let initial_equity = initial_cash;
         let final_equity = equity_curve_decimal.last().unwrap().1;
 
         // 1. Total Return (Decimal)
